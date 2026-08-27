@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MetroRuma · Control de abastecimiento</title>
+  <?!= include('Estilos'); ?>
+</head>
+
+<body>
+<div class="shell">
+
+  <!-- ================================================================
+       RIEL DE NAVEGACIÓN
+       ================================================================ -->
+  <nav class="rail" aria-label="Secciones">
+    <div class="rail-mark" title="MetroRuma">
+      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="3" y="14" width="18" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="5" y="8" width="14" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="8" y="2" width="8" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+    </div>
+
+    <div class="rail-nav" role="tablist" aria-label="Vistas del control">
+      <button type="button" class="rail-tab" role="tab" id="tab-panorama"
+              aria-controls="view-panorama" aria-selected="true" data-view="panorama">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 20h18M6 20V11M11 20V5M16 20v-6M21 20v-9"
+                stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        Panorama
+      </button>
+
+      <button type="button" class="rail-tab" role="tab" id="tab-proveedores"
+              aria-controls="view-proveedores" aria-selected="false" data-view="proveedores">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 6h16M4 12h16M4 18h9" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        Proveedores
+        <span class="rail-tab-badge" id="badgeRisk" hidden>0</span>
+      </button>
+
+      <button type="button" class="rail-tab" role="tab" id="tab-semana"
+              aria-controls="view-semana" aria-selected="false" data-view="semana">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="16" rx="2"
+                stroke="currentColor" stroke-width="1.6"/>
+          <path d="M3 10h18M8 3v4M16 3v4M8 14h4" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        Semana
+        <span class="rail-tab-badge" id="badgeNotes" hidden>0</span>
+      </button>
+
+      <button type="button" class="rail-tab" role="tab" id="tab-detalle"
+              aria-controls="view-detalle" aria-selected="false" data-view="detalle">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 4h16v16H4zM4 9h16M9 9v11" stroke="currentColor"
+                stroke-width="1.6" stroke-linejoin="round"/>
+        </svg>
+        Detalle
+      </button>
+    </div>
+
+    <div class="rail-foot">
+      <button type="button" class="rail-action" id="btnReload"
+              title="Actualizar datos" aria-label="Actualizar datos">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"
+                stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
+      <button type="button" class="rail-action" id="btnSheet"
+              title="Abrir la planilla" aria-label="Abrir la planilla">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M14 3h7v7M21 3l-9 9M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"
+                stroke="currentColor" stroke-width="1.7"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ================================================================
+       CONTENIDO
+       ================================================================ -->
+  <div>
+    <header class="topbar">
+      <div class="topbar-id">
+        <span class="topbar-name">MetroRuma</span>
+        <span class="topbar-view" id="viewName">Panorama del mes</span>
+      </div>
+
+      <div class="topbar-meta">
+        <span class="stamp">
+          <span class="stamp-key">Corte</span>
+          <span class="stamp-value num" id="stampCut">—</span>
+        </span>
+        <span class="stamp">
+          <span class="stamp-key">Días hábiles</span>
+          <span class="stamp-value num" id="stampDays">—</span>
+        </span>
+        <span class="stamp">
+          <span class="stamp-key">Real hasta</span>
+          <span class="stamp-value num" id="stampActual">—</span>
+        </span>
+        <span class="stamp">
+          <span class="stamp-key">Informe</span>
+          <span class="stamp-value num" id="stampReport">—</span>
+        </span>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="notice notice-error" id="bannerError" hidden role="alert">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M12 7v6M12 16.5v.5" stroke="currentColor"
+                stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <div class="notice-body" id="bannerErrorText"></div>
+      </div>
+
+      <div class="notice notice-warn" id="bannerWarn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 4 2.5 20h19L12 4Z" stroke="currentColor"
+                stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M12 10v4M12 17v.5" stroke="currentColor"
+                stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <div class="notice-body" id="bannerWarnText"></div>
+      </div>
+
+      <div class="notice notice-info" id="bannerInfo">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M12 11v5M12 7.5v.5" stroke="currentColor"
+                stroke-width="1.8" stroke-linecap="round"/>
+        </svg>
+        <div class="notice-body" id="bannerInfoText">Leyendo Plan, Ingresos e Informegmail…</div>
+      </div>
+
+      <!-- Filtros: en pantallas chicas se pliegan para que los números
+           queden arriba -->
+      <details class="filterbox" id="filterBox" open>
+        <summary class="filterbox-summary">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          Filtros
+        </summary>
+        <section class="filters" aria-label="Filtros">
+        <div class="field">
+          <label class="field-label" for="fMonth">Mes</label>
+          <select class="select" id="fMonth"></select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="fFrom">Desde</label>
+          <input class="input" id="fFrom" type="date">
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="fTo">Hasta</label>
+          <input class="input" id="fTo" type="date">
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="fProvider">Proveedor</label>
+          <select class="select" id="fProvider">
+            <option value="">Todos</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="fSearch">Buscar</label>
+          <input class="input" id="fSearch" type="search"
+                 placeholder="Proveedor, predio, rol…">
+        </div>
+
+        <div class="filters-actions">
+          <button type="button" class="btn" id="btnClear">Limpiar</button>
+        </div>
+        </section>
+      </details>
+
+      <!-- ============================================================
+           PANORAMA
+           ============================================================ -->
+      <div class="tabpanel" id="view-panorama" role="tabpanel"
+           aria-labelledby="tab-panorama">
+
+        <div class="grid grid-hero stagger">
+          <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">La ruma del mes</h2>
+                <p class="panel-note">
+                  El plan del mes es la regla graduada. Cada estrato es un día
+                  hábil recibido; la marca vertical es el plan a la fecha y la
+                  silueta punteada, el cierre al ritmo actual.
+                </p>
+              </div>
+              <div class="panel-tools">
+                <button type="button" class="btn btn-sm" id="btnCopy">Copiar resumen</button>
+              </div>
+            </div>
+
+            <div class="ruma">
+              <div class="ruma-legend">
+                <span class="key"><span class="key-swatch"></span>Ingreso real</span>
+                <span class="key"><span class="key-swatch key-swatch-gmail"></span>Complemento Gmail</span>
+                <span class="key"><span class="key-swatch key-swatch-plan"></span>Plan a la fecha</span>
+                <span class="key"><span class="key-swatch key-swatch-proj"></span>Proyección de cierre</span>
+              </div>
+
+              <div id="rumaFigure" role="img"
+                   aria-label="Avance del mes contra el plan"></div>
+
+              <div class="ruma-readout" id="rumaReadout"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Atacar hoy</h2>
+                <p class="panel-note">
+                  Proveedores ordenados por metros ruma en riesgo al cierre,
+                  no por porcentaje: primero lo que más pesa en el plan.
+                </p>
+              </div>
+            </div>
+            <div class="attack" id="attackList"></div>
+          </section>
+        </div>
+
+        <section class="gauges" id="gauges" aria-label="Mediciones del mes"></section>
+
+        <div class="grid stagger">
+          <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Curva de avance contra plan</h2>
+                <p class="panel-note">
+                  Acumulado real más complemento contra el plan prorrateado.
+                  La banda gris es el corredor de ±5% donde el mes todavía se
+                  considera en línea; la línea naranja es el ritmo que exige
+                  cerrar el plan con los días hábiles que quedan.
+                </p>
+              </div>
+              <div class="panel-tools">
+                <button type="button" class="btn btn-sm" id="btnCurveMode"
+                        data-mode="mr">Ver en %</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart" id="chartCurve"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Recepción diaria</h2>
+                <p class="panel-note">
+                  Barras por día: la parte sólida viene de Ingresos y la
+                  rayada del complemento Gmail. La línea gruesa es el promedio
+                  móvil de 5 días hábiles y la punteada, el plan diario.
+                </p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart" id="chartDaily"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- ============================================================
+           PROVEEDORES
+           ============================================================ -->
+      <div class="tabpanel" id="view-proveedores" role="tabpanel"
+           aria-labelledby="tab-proveedores" hidden>
+
+        <div class="grid grid-lead stagger">
+          <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Desvío contra el plan a la fecha</h2>
+                <p class="panel-note">
+                  Cuánto le falta o le sobra a cada proveedor respecto de lo
+                  que debía llevar hoy. A la izquierda lo que hay que recuperar.
+                </p>
+              </div>
+              <div class="panel-tools">
+                <button type="button" class="btn btn-sm" id="btnGapMode"
+                        data-mode="abs">Ver en %</button>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart chart-scroll" id="chartGap"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Concentración de la brecha</h2>
+                <p class="panel-note">
+                  Cuántos proveedores explican el 80% de lo que falta. Si son
+                  dos o tres, el mes se arregla con llamados; si son diez, el
+                  problema es el programa.
+                </p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart" id="chartPareto"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Cruce mensual por proveedor</h2>
+              <p class="panel-note">
+                Plan a la fecha = plan del mes × días hábiles transcurridos ÷
+                días hábiles del mes. Proyección = ritmo diario actual × días
+                hábiles del mes. Haz clic en una fila para abrir la ficha.
+              </p>
+            </div>
+            <div class="panel-tools">
+              <span class="stamp">
+                <span class="stamp-value" id="providerCount">—</span>
+              </span>
+              <button type="button" class="btn btn-sm" id="btnExport">Copiar tabla</button>
+            </div>
+          </div>
+
+          <div class="panel-body panel-body-flush">
+            <div class="table-wrap">
+              <table class="table" id="providerTable">
+                <thead>
+                  <tr>
+                    <th class="sortable" data-sort="provider" scope="col">
+                      Proveedor <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="plan" scope="col">
+                      Plan mes <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="planToDate" scope="col">
+                      Plan a la fecha <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="actual" scope="col">
+                      Real <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="gmail" scope="col">
+                      Gmail <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="total" scope="col">
+                      Total <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="gapToDate" scope="col">
+                      Desvío <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="complianceToDate" scope="col">
+                      Cumpl. a la fecha <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="projection" scope="col">
+                      Proyección <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="risk" scope="col">
+                      MR en riesgo <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="idleDays" scope="col">
+                      Sin recibir <span class="sort-caret">▾</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="providerBody"></tbody>
+                <tfoot id="providerFoot"></tfoot>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ============================================================
+           SEMANA · APUNTES
+           ============================================================ -->
+      <div class="tabpanel" id="view-semana" role="tabpanel"
+           aria-labelledby="tab-semana" hidden>
+
+        <section class="week-bar">
+          <div class="field">
+            <label class="field-label" for="fWeek">Semana</label>
+            <select class="select" id="fWeek"></select>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="fNoteFilter">Mostrar</label>
+            <select class="select" id="fNoteFilter">
+              <option value="accion">Solo lo que exige acción</option>
+              <option value="todos">Todos los proveedores</option>
+              <option value="guardados">Solo apuntes guardados</option>
+            </select>
+          </div>
+
+          <div class="week-bar-actions">
+            <button type="button" class="btn" id="btnDraft">Recalcular borradores</button>
+            <button type="button" class="btn btn-solid" id="btnSaveAll">
+              Guardar la semana
+            </button>
+          </div>
+        </section>
+
+        <section class="panel" style="margin-bottom: var(--gap)">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Cumplimiento por proveedor y semana</h2>
+              <p class="panel-note">
+                Cada celda es lo recibido contra el plan de esa semana. El azul
+                marca sobre stock y el naranja, bajo stock. Sirve para ver si
+                un proveedor falla siempre o falló una vez.
+              </p>
+            </div>
+          </div>
+          <div class="heat-scroll">
+            <div class="heat" id="heatmap"></div>
+          </div>
+          <div class="heat-scale" id="heatScale"></div>
+        </section>
+
+        <div class="notes" id="notesList"></div>
+      </div>
+
+      <!-- ============================================================
+           DETALLE
+           ============================================================ -->
+      <div class="tabpanel" id="view-detalle" role="tabpanel"
+           aria-labelledby="tab-detalle" hidden>
+
+        <div class="grid grid-2 stagger">
+          <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Salud de los datos</h2>
+                <p class="panel-note">
+                  De dónde viene cada metro ruma que estás mirando.
+                </p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="drawer-figures" id="healthFigures"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Proveedores sin fila en Plan</h2>
+                <p class="panel-note">
+                  Llegó material a nombre de estos proveedores pero no tienen
+                  plan asociado. Se cuentan en el total y no en el cumplimiento.
+                </p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div id="unmatchedList"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Detalle diario utilizado</h2>
+              <p class="panel-note">
+                Auditoría fila por fila: qué vino de Ingresos, qué del
+                complemento Gmail y con qué método se homologó el proveedor.
+              </p>
+            </div>
+            <div class="panel-tools">
+              <select class="select" id="fSource" style="width:auto">
+                <option value="">Ingresos + Gmail</option>
+                <option value="INGRESOS">Solo Ingresos</option>
+                <option value="GMAIL">Solo Gmail</option>
+              </select>
+              <span class="stamp"><span class="stamp-value" id="detailCount">—</span></span>
+            </div>
+          </div>
+
+          <div class="panel-body panel-body-flush">
+            <div class="table-wrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th scope="col">Fecha</th>
+                    <th scope="col">Fuente</th>
+                    <th scope="col">Proveedor</th>
+                    <th scope="col">Nombre original</th>
+                    <th scope="col">Predio / Rol</th>
+                    <th scope="col">Estatus</th>
+                    <th class="n" scope="col">Cumplimiento</th>
+                    <th class="n" scope="col">Cantidad</th>
+                    <th scope="col">Homologación</th>
+                  </tr>
+                </thead>
+                <tbody id="detailBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Cajón de proveedor -->
+<div id="drawerHost"></div>
+
+<!-- Tooltip de gráficos -->
+<div class="tooltip" id="tooltip" role="status" aria-live="polite"></div>
+
+<!-- Carga: esqueleto del propio tablero, no un disco girando -->
+<div class="veil" id="veil">
+  <div class="bone bone-hero"></div>
+  <div class="bone-row">
+    <div class="bone bone-cell"></div>
+    <div class="bone bone-cell"></div>
+    <div class="bone bone-cell"></div>
+    <div class="bone bone-cell"></div>
+    <div class="bone bone-cell"></div>
+    <div class="bone bone-cell"></div>
+  </div>
+  <div class="bone bone-wide"></div>
+  <div class="veil-caption">
+    <b>Cruzando Plan, Ingresos e Informegmail</b>
+    <span id="veilStep">leyendo la planilla…</span>
+  </div>
+</div>
+
+<?!= include('Panel'); ?>
+</body>
+</html>
