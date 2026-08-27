@@ -1,0 +1,961 @@
+<script>
+/* =====================================================================
+ * MetroRuma · panorama, proveedores y detalle
+ *
+ * Pintado de las mediciones, la lista de ataque, las tablas y la ficha
+ * lateral del proveedor.
+ * ===================================================================== */
+
+/* =====================================================================
+ * PINTADO
+ * ===================================================================== */
+
+function renderAll() {
+  if (!DATA) { return; }
+
+  ROWS = filteredRows();
+  SUMMARY = buildSummary(filteredRows(true));
+  WEEKS = buildWeeks(filteredRows(true), SUMMARY);
+
+  renderGauges();
+  renderAttack();
+  renderProviderTable();
+  renderDetail();
+  renderHealth();
+  renderWeekOptions();
+  renderWeekView();
+  redrawCharts();
+
+  if (VIEW !== 'panorama') { drawRuma(); }
+}
+
+function renderReadout(model) {
+  var host = id('rumaReadout');
+
+  if (!model) { host.innerHTML = ''; return; }
+
+  var gap = model.total - model.planToDate;
+  var remaining = model.wd.remaining || 0;
+  var need = remaining > 0
+    ? Math.max(0, model.plan - model.total) / remaining
+    : null;
+
+  var effort = (need !== null && model.pace > 0) ? need / model.pace : null;
+
+  var cells = [
+    {
+      key: 'Recibido a la fecha',
+      value: fmt(model.total),
+      unit: 'MR',
+      note: model.plan > 0
+        ? pctText(model.total / model.plan) + ' del plan del mes'
+        : 'Sin plan cargado'
+    },
+    {
+      key: 'Desvío a la fecha',
+      value: signed(gap),
+      unit: 'MR',
+      tone: gap >= 0 ? 'over' : (gap > -model.planToDate * 0.1 ? 'warn' : 'crit'),
+      note: gap >= 0 ? 'Por delante del plan diario' : 'Por detrás del plan diario'
+    },
+    {
+      key: 'Cierre proyectado',
+      value: fmt(model.projection),
+      unit: 'MR',
+      tone: model.plan > 0
+        ? (model.projection >= model.plan ? 'over' : 'crit')
+        : null,
+      note: model.plan > 0
+        ? pctText(model.projection / model.plan) + ' · ' +
+          signed(model.projection - model.plan) + ' MR vs plan'
+        : 'Sin plan para comparar'
+    },
+    {
+      key: 'Ritmo exigido',
+      value: need === null ? '—' : fmt(need),
+      unit: 'MR/día',
+      tone: effort !== null && effort > 1.15 ? 'warn' : null,
+      note: need === null
+        ? 'No quedan días hábiles'
+        : (effort === null
+            ? 'Ritmo actual sin referencia'
+            : 'Ritmo actual ' + fmt(model.pace) + ' MR/día · ×' +
+              effort.toFixed(2) + ' de esfuerzo')
+    }
+  ];
+
+  host.innerHTML = cells.map(function(cell) {
+    return '<div class="readout">' +
+      '<div class="readout-key">' + esc(cell.key) + '</div>' +
+      '<div class="readout-value num' +
+        (cell.tone ? ' is-' + cell.tone : '') + '">' +
+        esc(cell.value) +
+        '<span class="readout-unit">' + esc(cell.unit) + '</span>' +
+      '</div>' +
+      '<div class="readout-note">' + esc(cell.note) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderGauges() {
+  var wd = workdays();
+  var daily = buildDaily(ROWS).filter(function(point) { return point.elapsed; });
+  var plan = sum(SUMMARY, 'plan');
+  var actual = sum(SUMMARY, 'actual');
+  var gmail = sum(SUMMARY, 'gmail');
+  var total = actual + gmail;
+  var planToDate = plan * (wd.fraction || 0);
+  var pace = wd.elapsed > 0 ? total / wd.elapsed : 0;
+  var projection = wd.elapsed > 0 ? pace * wd.total : total;
+  var risk = sum(SUMMARY, 'risk');
+
+  var need = wd.remaining > 0
+    ? Math.max(0, plan - total) / wd.remaining
+    : null;
+
+  var ranked = SUMMARY.slice().sort(function(a, b) {
+    return b.total - a.total;
+  });
+
+  var topFive = ranked.slice(0, 5).reduce(function(acc, item) {
+    return acc + item.total;
+  }, 0);
+
+  var idle = SUMMARY.filter(function(item) {
+    return item.plan > 0 && item.idleDays >= 3;
+  }).length;
+
+  var below = SUMMARY.filter(function(item) {
+    return item.band === 'warn' || item.band === 'crit';
+  }).length;
+
+  var cells = [
+    {
+      key: 'Recibido',
+      value: fmt(total),
+      note: fmt(actual) + ' real · ' + fmt(gmail) + ' complemento',
+      spark: sparkline(
+        daily.map(function(point) { return point.cumulative; }),
+        PALETTE.brand, 'rgba(36,57,94,.12)'
+      ),
+      hint: 'Ingresos reales más el complemento Gmail dentro del filtro.'
+    },
+    {
+      key: 'Plan a la fecha',
+      value: fmt(planToDate),
+      note: wd.elapsed + ' de ' + wd.total + ' días hábiles al ' +
+        wd.referenceDateLabel,
+      hint: 'Plan del mes × días hábiles transcurridos ÷ días hábiles totales.'
+    },
+    {
+      key: 'Desvío',
+      value: signed(total - planToDate),
+      tone: total >= planToDate ? 'over' : 'crit',
+      note: planToDate > 0
+        ? pctText(total / planToDate) + ' de cumplimiento a la fecha'
+        : 'Sin plan a la fecha',
+      hint: 'Recibido menos plan a la fecha.'
+    },
+    {
+      key: 'Cierre proyectado',
+      value: fmt(projection),
+      tone: plan > 0 ? (projection >= plan ? 'over' : 'crit') : null,
+      note: plan > 0
+        ? pctText(projection / plan) + ' del plan del mes'
+        : 'Sin plan del mes',
+      hint: 'Ritmo diario actual × días hábiles del mes.'
+    },
+    {
+      key: 'MR en riesgo',
+      value: fmt(risk),
+      tone: risk > 0 ? 'warn' : null,
+      note: risk > 0
+        ? 'Se pierden si nadie cambia el ritmo'
+        : 'Ningún proveedor cierra bajo su plan',
+      hint: 'Suma, proveedor por proveedor, de lo que falta para su plan ' +
+        'si mantiene el ritmo actual.'
+    },
+    {
+      key: 'Ritmo diario',
+      value: fmt(pace),
+      note: need === null
+        ? 'No quedan días hábiles'
+        : 'Se exigen ' + fmt(need) + ' MR/día por ' + wd.remaining + ' días',
+      spark: sparkline(
+        daily.map(function(point) { return point.total; }),
+        PALETTE.hiviz, 'rgba(226,96,15,.12)'
+      ),
+      hint: 'Recibido ÷ días hábiles transcurridos.'
+    },
+    {
+      key: 'Bajo plan',
+      value: String(below),
+      tone: below > 0 ? 'warn' : null,
+      note: 'de ' + SUMMARY.length + ' proveedores con movimiento',
+      hint: 'Proveedores bajo el 95% de su plan a la fecha.'
+    },
+    {
+      key: 'Sin recibir',
+      value: String(idle),
+      tone: idle > 0 ? 'warn' : null,
+      note: '3 días hábiles o más sin recepción',
+      hint: 'Detecta al proveedor que se detuvo antes de que el mes lo muestre.'
+    },
+    {
+      key: 'Concentración',
+      value: total > 0 ? pctText(topFive / total) : '—',
+      note: 'Top 5 proveedores del abastecimiento',
+      hint: 'Cuánto del suministro depende de cinco nombres.'
+    }
+  ];
+
+  id('gauges').innerHTML = cells.map(function(cell) {
+    return '<div class="gauge">' +
+      '<div class="gauge-key">' + esc(cell.key) +
+        (cell.hint
+          ? '<span class="hint" title="' + esc(cell.hint) + '">?</span>'
+          : '') +
+      '</div>' +
+      '<div class="gauge-value num' +
+        (cell.tone ? ' is-' + cell.tone : '') + '">' + esc(cell.value) + '</div>' +
+      '<div class="gauge-note">' + esc(cell.note) + '</div>' +
+      (cell.spark ? '<div class="gauge-spark">' + cell.spark + '</div>' : '') +
+    '</div>';
+  }).join('');
+}
+
+function renderAttack() {
+  var host = id('attackList');
+  var wd = workdays();
+
+  var rows = SUMMARY
+    .filter(function(item) {
+      return item.plan > 0 && (item.risk > 0 || item.idleDays >= 3);
+    })
+    .slice(0, 8);
+
+  id('badgeRisk').textContent = String(rows.length);
+  id('badgeRisk').hidden = rows.length === 0;
+
+  if (!rows.length) {
+    host.innerHTML =
+      '<div class="attack-empty">Ningún proveedor proyecta cerrar bajo ' +
+      'su plan. Mantén el seguimiento semanal.</div>';
+    return;
+  }
+
+  host.innerHTML = rows.map(function(item, index) {
+    var reasons = [];
+
+    if (item.risk > 0) {
+      reasons.push(
+        'proyecta ' + fmt(item.projection) + ' de ' + fmt(item.plan) + ' MR'
+      );
+    }
+
+    if (item.idleDays >= 3) {
+      reasons.push('sin recibir hace ' + item.idleDays + ' días hábiles');
+    }
+
+    if (item.requiredPace !== null && item.effort !== null && item.effort > 1.1) {
+      reasons.push(
+        'necesita ' + fmt(item.requiredPace) + ' MR/día, ×' +
+        item.effort.toFixed(1) + ' su ritmo'
+      );
+    } else if (item.requiredPace !== null && item.requiredPace > 0) {
+      reasons.push('necesita ' + fmt(item.requiredPace) + ' MR/día');
+    }
+
+    return '<div class="attack-item">' +
+      '<span class="attack-rank">' + pad2(index + 1) + '</span>' +
+      '<button type="button" class="attack-name" data-act="ficha" ' +
+        'data-provider="' + esc(item.provider) + '">' +
+        esc(item.provider) +
+      '</button>' +
+      '<span class="attack-loss">' + fmt(item.risk) + ' MR</span>' +
+      '<p class="attack-why">' + esc(cap(reasons.join(' · '))) + '</p>' +
+      '<button type="button" class="attack-note" data-act="apunte" ' +
+        'data-provider="' + esc(item.provider) + '">Escribir apunte</button>' +
+    '</div>';
+  }).join('');
+
+  each('#attackList [data-act]', function(node) {
+    node.addEventListener('click', function() {
+      if (node.dataset.act === 'apunte') {
+        goToNote(node.dataset.provider);
+      } else {
+        openDrawer(node.dataset.provider, node);
+      }
+    });
+  });
+}
+
+function renderProviderTable() {
+  var body = id('providerBody');
+  var foot = id('providerFoot');
+
+  id('providerCount').textContent =
+    SUMMARY.length + (SUMMARY.length === 1 ? ' proveedor' : ' proveedores');
+
+  each('#providerTable th.sortable', function(th) {
+    if (th.dataset.sort === SORT.key) {
+      th.setAttribute('aria-sort', SORT.dir === 'asc' ? 'ascending' : 'descending');
+    } else {
+      th.removeAttribute('aria-sort');
+    }
+  });
+
+  if (!SUMMARY.length) {
+    body.innerHTML = '<tr class="empty"><td colspan="12">' +
+      'No hay proveedores para el filtro seleccionado.</td></tr>';
+    foot.innerHTML = '';
+    return;
+  }
+
+  var rows = SUMMARY.slice().sort(function(a, b) {
+    var key = SORT.key;
+    var dir = SORT.dir === 'asc' ? 1 : -1;
+
+    if (key === 'provider') {
+      return dir * a.provider.localeCompare(b.provider, 'es', {
+        sensitivity: 'base'
+      });
+    }
+
+    var av = a[key] === null ? -Infinity : a[key];
+    var bv = b[key] === null ? -Infinity : b[key];
+
+    return dir * (av - bv);
+  });
+
+  body.innerHTML = rows.map(function(item) {
+    return '<tr data-provider="' + esc(item.provider) + '"' +
+      (PICKED === item.provider ? ' class="is-picked"' : '') + '>' +
+      '<td class="name">' +
+        '<button type="button" class="linkish" data-provider="' +
+          esc(item.provider) + '">' + esc(item.provider) + '</button> ' +
+        tagFor(item.band) +
+      '</td>' +
+      cell(fmt(item.plan)) +
+      cell(fmt(item.planToDate)) +
+      cell(fmt(item.actual)) +
+      cell(fmt(item.gmail)) +
+      cell('<b>' + fmt(item.total) + '</b>') +
+      cell(signed(item.gapToDate), item.gapToDate >= 0 ? 'pos' : 'neg') +
+      '<td class="n"><div class="cell-stack">' +
+        '<span class="' + (item.complianceToDate === null ? 'dim' : '') + '">' +
+          (item.complianceToDate === null
+            ? 'sin plan' : pctText(item.complianceToDate)) +
+        '</span>' + meter(item.complianceToDate, item.band) +
+      '</div></td>' +
+      cell(fmt(item.projection),
+        item.plan > 0 && item.projection < item.plan ? 'neg' : 'pos') +
+      cell(item.risk > 0 ? fmt(item.risk) : '—',
+        item.risk > 0 ? 'neg' : 'dim') +
+      cell(item.plan > 0 ? String(item.idleDays) : '—',
+        item.idleDays >= 3 ? 'neg' : 'dim') +
+      '<td>' + trendCell(item.provider) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var totals = SUMMARY.reduce(function(acc, item) {
+    ['plan', 'planToDate', 'actual', 'gmail', 'total', 'projection', 'risk']
+      .forEach(function(key) { acc[key] += item[key]; });
+    return acc;
+  }, {
+    plan: 0, planToDate: 0, actual: 0, gmail: 0,
+    total: 0, projection: 0, risk: 0
+  });
+
+  var gap = totals.total - totals.planToDate;
+
+  foot.innerHTML = '<tr>' +
+    '<td>Total</td>' +
+    cell(fmt(totals.plan)) +
+    cell(fmt(totals.planToDate)) +
+    cell(fmt(totals.actual)) +
+    cell(fmt(totals.gmail)) +
+    cell(fmt(totals.total)) +
+    cell(signed(gap), gap >= 0 ? 'pos' : 'neg') +
+    cell(totals.planToDate > 0
+      ? pctText(totals.total / totals.planToDate) : '—') +
+    cell(fmt(totals.projection)) +
+    cell(totals.risk > 0 ? fmt(totals.risk) : '—',
+      totals.risk > 0 ? 'neg' : 'dim') +
+    cell('') +
+    '<td></td>' +
+  '</tr>';
+
+  each('#providerBody tr[data-provider]', function(row) {
+    var handle = row.querySelector('.linkish');
+
+    row.addEventListener('click', function() {
+      openDrawer(row.dataset.provider, handle);
+    });
+
+    handle.addEventListener('click', function(event) {
+      event.stopPropagation();
+      openDrawer(row.dataset.provider, handle);
+    });
+  });
+}
+
+/**
+ * Una casilla por semana con el color del cumplimiento: distingue de un
+ * vistazo al proveedor que falla siempre del que falló una vez.
+ */
+function trendCell(provider) {
+  var blocks = WEEKS.map(function(week) {
+    var line = week.lines.filter(function(row) {
+      return row.provider === provider;
+    })[0];
+
+    if (!line || line.plan <= 0) {
+      return '<i class="trend-block is-void" title="' +
+        esc(week.label) + ': sin plan"></i>';
+    }
+
+    var colors = heatColor(line.compliance);
+
+    return '<i class="trend-block" style="background:' + colors[0] +
+      '" title="' + esc(week.label) + ': ' +
+      Math.round(line.compliance * 100) + '% · ' +
+      fmt(line.received) + ' de ' + fmt(line.plan) + ' MR"></i>';
+  }).join('');
+
+  return blocks
+    ? '<span class="trend" role="img" aria-label="Cumplimiento semana a semana">' +
+      blocks + '</span>'
+    : '<span class="dim">—</span>';
+}
+
+function cell(html, className) {
+  return '<td class="n' + (className ? ' ' + className : '') + '">' +
+    html + '</td>';
+}
+
+function meter(compliance, bandKey) {
+  if (compliance === null) { return ''; }
+
+  var width = Math.max(2, Math.min(100, compliance * 100 * 0.66));
+
+  return '<span class="meter">' +
+    '<span class="meter-fill" style="width:' + width + '%;background:' +
+      (BAND_COLOR[bandKey] || PALETTE.line2) + '"></span>' +
+    '<span class="meter-mark" style="left:66%"></span>' +
+  '</span>';
+}
+
+function tagFor(bandKey) {
+  var cls = {
+    over: 'tag-over', ok: 'tag-ok',
+    warn: 'tag-warn', crit: 'tag-crit', void: 'tag-ok'
+  };
+
+  return '<span class="tag ' + (cls[bandKey] || 'tag-ok') + '">' +
+    esc(BAND_LABEL[bandKey] || '') + '</span>';
+}
+
+var DETAIL_PAGE = 300;
+
+function renderDetail() {
+  var body = id('detailBody');
+  var dir = DETAIL_SORT.dir === 'asc' ? 1 : -1;
+  var key = DETAIL_SORT.key;
+
+  var rows = ROWS.slice().sort(function(a, b) {
+    var av = a[key];
+    var bv = b[key];
+
+    if (typeof av === 'number' || typeof bv === 'number') {
+      return dir * ((Number(av) || 0) - (Number(bv) || 0));
+    }
+
+    var compare = String(av || '').localeCompare(
+      String(bv || ''), 'es', { sensitivity: 'base' }
+    );
+
+    return dir * (compare || a.provider.localeCompare(b.provider, 'es'));
+  });
+
+  each('#detailTable th[data-sort]', function(th) {
+    if (th.dataset.sort === key) {
+      th.setAttribute(
+        'aria-sort', DETAIL_SORT.dir === 'asc' ? 'ascending' : 'descending'
+      );
+    } else {
+      th.removeAttribute('aria-sort');
+    }
+  });
+
+  var limit = DETAIL_ALL ? rows.length : DETAIL_PAGE;
+  var shown = Math.min(limit, rows.length);
+
+  id('detailCount').textContent = rows.length > shown
+    ? fmtInt(shown) + ' de ' + fmtInt(rows.length) + ' filas'
+    : fmtInt(rows.length) + (rows.length === 1 ? ' fila' : ' filas');
+
+  var more = id('btnDetailAll');
+  more.hidden = rows.length <= DETAIL_PAGE;
+  more.textContent = DETAIL_ALL
+    ? 'Ver solo las primeras ' + DETAIL_PAGE
+    : 'Ver las ' + fmtInt(rows.length) + ' filas';
+
+  if (!rows.length) {
+    body.innerHTML = '<tr class="empty"><td colspan="9">' +
+      'No hay filas para el filtro seleccionado. Prueba a limpiar los ' +
+      'filtros o a elegir otro mes.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = rows.slice(0, limit).map(function(row) {
+    var place = [row.predio, row.rol].filter(Boolean).join(' / ');
+    var estatus = (row.estatus || '').split(' / ').filter(Boolean);
+
+    return '<tr>' +
+      '<td class="num">' + esc(row.fechaLabel) + '</td>' +
+      '<td><span class="tag ' +
+        (row.source === 'GMAIL' ? 'tag-gmail' : 'tag-real') + '">' +
+        (row.source === 'GMAIL' ? 'Gmail' : 'Real') + '</span></td>' +
+      '<td class="name"><b>' + esc(row.provider) + '</b></td>' +
+      '<td class="dim">' + esc(clip(row.providerRaw, 42)) + '</td>' +
+      '<td>' + esc(clip(place, 34)) + '</td>' +
+      '<td>' + estatus.map(function(value) {
+        return '<span class="dot dot-' +
+          value.toLowerCase().replace(/[^a-z]/g, '') + '" title="' +
+          esc(value) + '"></span>';
+      }).join(' ') + '</td>' +
+      '<td class="n num">' +
+        (row.cumplimiento === null || row.cumplimiento === undefined
+          ? '' : fmt(row.cumplimiento)) + '</td>' +
+      '<td class="n num">' + fmt(row.cantidad) + '</td>' +
+      '<td class="dim">' + esc(row.matchMethod) +
+        (row.matchScore
+          ? ' (' + Number(row.matchScore).toFixed(2) + ')' : '') + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function copyDetailTable() {
+  var head = [
+    'Fecha', 'Fuente', 'Proveedor', 'Nombre original', 'Predio', 'Rol',
+    'Estatus', 'Cumplimiento', 'Cantidad', 'UM', 'Homologación'
+  ];
+
+  var body = ROWS.map(function(row) {
+    return [
+      row.fechaLabel,
+      row.source === 'GMAIL' ? 'Gmail' : 'Real',
+      row.provider, row.providerRaw, row.predio, row.rol, row.estatus,
+      row.cumplimiento === null || row.cumplimiento === undefined
+        ? '' : dec(row.cumplimiento),
+      dec(row.cantidad), row.um, row.matchMethod
+    ].join('\t');
+  });
+
+  copyText(
+    [head.join('\t')].concat(body).join('\n'),
+    fmtInt(ROWS.length) + ' filas copiadas. Pégalas en una hoja de cálculo.'
+  );
+}
+
+function renderHealth() {
+  var source = DATA.source || {};
+  var audit = DATA.gmailAudit || {};
+
+  var figures = [
+    ['Filas de Ingresos', fmtInt(source.actualRows)],
+    ['Filas de complemento', fmtInt(source.supplementRows)],
+    ['Informes Gmail leídos', fmtInt(audit.reports || 0)],
+    ['Proveedores en Plan', fmtInt(source.planProviders)],
+    ['Último dato real', source.lastActualDateLabel],
+    ['Último informe', source.latestReportDateLabel]
+  ];
+
+  id('healthFigures').innerHTML = figures.map(function(pair) {
+    return '<div class="drawer-figure">' +
+      '<div class="readout-key">' + esc(pair[0]) + '</div>' +
+      '<div class="readout-value num" style="font-size:16px">' +
+        esc(String(pair[1])) + '</div>' +
+    '</div>';
+  }).join('');
+
+  var unmatched = source.unmatchedProviders || [];
+
+  id('unmatchedList').innerHTML = unmatched.length
+    ? unmatched.map(function(name) {
+        return '<span class="tag tag-warn" style="margin:0 4px 4px 0">' +
+          esc(name) + '</span>';
+      }).join('')
+    : '<p class="panel-note">Todos los proveedores con movimiento tienen ' +
+      'su fila en Plan.</p>';
+}
+
+/* =====================================================================
+ * FICHA DE PROVEEDOR
+ * ===================================================================== */
+
+function openDrawer(provider, trigger) {
+  var item = SUMMARY.filter(function(row) {
+    return row.provider === provider;
+  })[0];
+
+  if (!item) { return; }
+
+  LAST_FOCUS = trigger || document.activeElement;
+  PICKED = provider;
+
+  var wd = workdays();
+
+  var daily = buildDaily(
+    ROWS.filter(function(row) { return row.provider === provider; })
+  ).filter(function(point) { return point.elapsed; });
+
+  var weekly = WEEKS.map(function(week) {
+    var line = week.lines.filter(function(row) {
+      return row.provider === provider;
+    })[0];
+
+    return { week: week, line: line };
+  }).filter(function(entry) { return entry.line; });
+
+  var figures = [
+    ['Plan del mes', fmt(item.plan) + ' MR'],
+    ['Plan a la fecha', fmt(item.planToDate) + ' MR'],
+    ['Recibido', fmt(item.total) + ' MR'],
+    ['Desvío', signed(item.gapToDate) + ' MR'],
+    ['Cierre proyectado', fmt(item.projection) + ' MR'],
+    ['MR en riesgo', item.risk > 0 ? fmt(item.risk) + ' MR' : '—'],
+    ['Ritmo actual', fmt(item.pace) + ' MR/día'],
+    ['Ritmo exigido', item.requiredPace === null
+      ? '—' : fmt(item.requiredPace) + ' MR/día']
+  ];
+
+  var notes = (DATA.apuntes || []).filter(function(note) {
+    return note.provider === provider;
+  }).slice(-4).reverse();
+
+  id('drawerHost').innerHTML =
+    '<div class="scrim" data-close="1"></div>' +
+    '<aside class="drawer" role="dialog" aria-modal="true" ' +
+      'aria-label="Ficha de ' + esc(provider) + '">' +
+
+      '<div class="drawer-head">' +
+        '<div>' +
+          '<div class="drawer-name">' + esc(provider) + '</div>' +
+          '<div class="drawer-sub">' + esc(BAND_LABEL[item.band]) +
+            ' · ' + (item.complianceToDate === null
+              ? 'sin plan'
+              : pctText(item.complianceToDate) + ' del plan a la fecha') +
+            (item.lastDate
+              ? ' · última recepción ' + dmy(item.lastDate)
+              : ' · sin recepciones') +
+          '</div>' +
+        '</div>' +
+        '<div class="drawer-head-actions">' +
+          '<button type="button" class="btn btn-sm btn-solid" ' +
+            'data-act="apunte">Escribir apunte</button>' +
+          '<button type="button" class="btn btn-sm btn-quiet" data-close="1" ' +
+            'aria-label="Cerrar la ficha">Cerrar</button>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="drawer-body">' +
+        '<div class="drawer-section">' +
+          '<div class="drawer-figures">' +
+            figures.map(function(pair) {
+              return '<div class="drawer-figure">' +
+                '<div class="readout-key">' + esc(pair[0]) + '</div>' +
+                '<div class="readout-value num" style="font-size:15px">' +
+                  esc(pair[1]) + '</div>' +
+              '</div>';
+            }).join('') +
+          '</div>' +
+        '</div>' +
+
+        (daily.length > 1
+          ? '<div class="drawer-section">' +
+              '<div class="drawer-section-title">Recepción diaria</div>' +
+              sparkline(
+                daily.map(function(point) { return point.total; }),
+                PALETTE.brand, 'rgba(36,57,94,.12)'
+              ) +
+            '</div>'
+          : '') +
+
+        (weekly.length
+          ? '<div class="drawer-section">' +
+              '<div class="drawer-section-title">Semana a semana</div>' +
+              '<table class="table" style="font-size:11px">' +
+                '<thead><tr><th>Semana</th><th class="n">Plan</th>' +
+                '<th class="n">Recibido</th><th class="n">Cumpl.</th></tr></thead>' +
+                '<tbody>' + weekly.map(function(entry) {
+                  var colors = heatColor(entry.line.compliance);
+
+                  return '<tr>' +
+                    '<td>' + esc(entry.week.label) + '</td>' +
+                    '<td class="n num">' + fmt(entry.line.plan) + '</td>' +
+                    '<td class="n num">' + fmt(entry.line.received) + '</td>' +
+                    '<td class="n"><span class="tag" style="background:' +
+                      (colors ? colors[0] : PALETTE.sunk) + ';color:' +
+                      (colors ? colors[1] : PALETTE.ink2) + '">' +
+                      (entry.line.compliance === null
+                        ? '—'
+                        : Math.round(entry.line.compliance * 100) + '%') +
+                    '</span></td>' +
+                  '</tr>';
+                }).join('') + '</tbody>' +
+              '</table>' +
+            '</div>'
+          : '') +
+
+        (notes.length
+          ? '<div class="drawer-section">' +
+              '<div class="drawer-section-title">Últimos apuntes</div>' +
+              notes.map(function(note) {
+                return '<div style="padding:9px 0;border-top:1px solid var(--line)">' +
+                  '<div class="readout-key">' + esc(note.week) + ' · ' +
+                    esc(note.status) + '</div>' +
+                  '<p style="margin-top:4px;font-size:11.5px;line-height:1.55">' +
+                    esc(note.action || note.diagnosis) + '</p>' +
+                '</div>';
+              }).join('') +
+            '</div>'
+          : '') +
+
+        '<div class="drawer-section">' +
+          '<div class="drawer-section-title">Homologación</div>' +
+          '<p class="panel-note">' + esc(originsOf(provider)) + '</p>' +
+        '</div>' +
+      '</div>' +
+    '</aside>';
+
+  each('#drawerHost [data-close]', function(node) {
+    node.addEventListener('click', closeDrawer);
+  });
+
+  id('drawerHost').querySelector('[data-act="apunte"]')
+    .addEventListener('click', function() { goToNote(provider); });
+
+  trapFocus(document.querySelector('.drawer'));
+  renderProviderTable();
+}
+
+/**
+ * La ficha es un diálogo modal: el tabulador no debe escaparse hacia el
+ * tablero de atrás, y al cerrar el foco vuelve de donde salió.
+ */
+function trapFocus(panel) {
+  if (!panel) { return; }
+
+  var selector = 'button, [href], input, select, textarea, ' +
+    '[tabindex]:not([tabindex="-1"])';
+
+  var first = panel.querySelector(selector);
+
+  if (first) { first.focus(); }
+
+  panel.addEventListener('keydown', function(event) {
+    if (event.key !== 'Tab') { return; }
+
+    var nodes = Array.prototype.filter.call(
+      panel.querySelectorAll(selector),
+      function(node) { return node.offsetParent !== null; }
+    );
+
+    if (!nodes.length) { return; }
+
+    var edge = event.shiftKey ? nodes[0] : nodes[nodes.length - 1];
+
+    if (document.activeElement === edge) {
+      event.preventDefault();
+      (event.shiftKey ? nodes[nodes.length - 1] : nodes[0]).focus();
+    }
+  });
+}
+
+function originsOf(provider) {
+  var names = {};
+
+  (DATA.rows || []).forEach(function(row) {
+    if (row.provider === provider && row.providerRaw) {
+      names[row.providerRaw] = row.matchMethod;
+    }
+  });
+
+  var list = Object.keys(names);
+
+  if (!list.length) {
+    return 'Solo aparece en la hoja Plan; todavía no registra movimiento.';
+  }
+
+  return 'Se consolida desde ' + list.length +
+    (list.length === 1 ? ' nombre' : ' nombres') + ': ' +
+    list.map(function(name) {
+      return name + ' (' + names[name].toLowerCase() + ')';
+    }).join('; ') + '.';
+}
+
+function closeDrawer() {
+  if (!PICKED) { return; }
+
+  var provider = PICKED;
+
+  PICKED = null;
+  id('drawerHost').innerHTML = '';
+  renderProviderTable();
+
+  // La tabla se vuelve a pintar, así que el nodo de origen ya no existe:
+  // se busca de nuevo el botón de ese proveedor.
+  var back = (LAST_FOCUS && document.contains(LAST_FOCUS))
+    ? LAST_FOCUS
+    : document.querySelector(
+        '#providerBody .linkish[data-provider="' + cssEscape(provider) + '"]'
+      );
+
+  if (back && back.focus) { back.focus(); }
+
+  LAST_FOCUS = null;
+}
+
+/* =====================================================================
+ * ACCIONES
+ * ===================================================================== */
+
+function clearFilters() {
+  id('fFrom').value = DATA.month.startKey || '';
+  id('fTo').value = DATA.month.endKey || '';
+  id('fProvider').value = '';
+  id('fSource').value = '';
+  id('fSearch').value = '';
+  renderAll();
+}
+
+function openSheet() {
+  var url = DATA && DATA.source ? DATA.source.spreadsheetUrl : '';
+
+  if (!url) { return; }
+
+  window.open(url, '_blank');
+}
+
+/**
+ * Resumen en texto plano, listo para pegar en un correo o en WhatsApp.
+ */
+function copySummary() {
+  var wd = workdays();
+  var plan = sum(SUMMARY, 'plan');
+  var total = sum(SUMMARY, 'actual') + sum(SUMMARY, 'gmail');
+  var planToDate = plan * (wd.fraction || 0);
+  var pace = wd.elapsed > 0 ? total / wd.elapsed : 0;
+  var projection = pace * wd.total;
+  var risk = sum(SUMMARY, 'risk');
+
+  var need = wd.remaining > 0
+    ? Math.max(0, plan - total) / wd.remaining
+    : 0;
+
+  var lines = [
+    'METRORUMA · ' + cap(DATA.month.label) + ' · corte ' + wd.referenceDateLabel,
+    'Días hábiles: ' + wd.elapsed + ' de ' + wd.total +
+      ' (quedan ' + wd.remaining + ')',
+    '',
+    'Recibido: ' + fmt(total) + ' MR',
+    'Plan a la fecha: ' + fmt(planToDate) + ' MR (' +
+      (planToDate > 0 ? pctText(total / planToDate) : 's/plan') + ')',
+    'Desvío: ' + signed(total - planToDate) + ' MR',
+    'Cierre proyectado: ' + fmt(projection) + ' MR de ' + fmt(plan) + ' MR',
+    'MR en riesgo: ' + fmt(risk),
+    'Ritmo actual: ' + fmt(pace) + ' MR/día · exigido ' + fmt(need) + ' MR/día',
+    ''
+  ];
+
+  var attack = SUMMARY
+    .filter(function(item) { return item.risk > 0; })
+    .slice(0, 5);
+
+  if (attack.length) {
+    lines.push('Prioridades:');
+
+    attack.forEach(function(item, index) {
+      lines.push(
+        (index + 1) + '. ' + item.provider + ': ' + fmt(item.risk) +
+        ' MR en riesgo, proyecta ' + fmt(item.projection) + ' de ' +
+        fmt(item.plan) + ' MR' +
+        (item.idleDays >= 3
+          ? ' (sin recibir hace ' + item.idleDays + ' días)' : '')
+      );
+    });
+  } else {
+    lines.push('Sin proveedores en riesgo de cierre bajo plan.');
+  }
+
+  copyText(lines.join('\n'), 'Resumen copiado. Pégalo donde lo necesites.');
+}
+
+function copyProviderTable() {
+  var head = [
+    'Proveedor', 'Plan mes', 'Plan a la fecha', 'Real', 'Gmail', 'Total',
+    'Desvío', 'Cumpl. a la fecha', 'Proyección', 'MR en riesgo',
+    'Días sin recibir', 'Clasificación'
+  ];
+
+  var body = SUMMARY.map(function(item) {
+    return [
+      item.provider,
+      dec(item.plan), dec(item.planToDate), dec(item.actual),
+      dec(item.gmail), dec(item.total), dec(item.gapToDate),
+      item.complianceToDate === null ? '' : dec(item.complianceToDate * 100),
+      dec(item.projection), dec(item.risk),
+      item.plan > 0 ? item.idleDays : '',
+      BAND_LABEL[item.band] || ''
+    ].join('\t');
+  });
+
+  copyText(
+    [head.join('\t')].concat(body).join('\n'),
+    'Tabla copiada. Pégala directamente en una hoja de cálculo.'
+  );
+}
+
+function copyText(text, message) {
+  var area = document.createElement('textarea');
+
+  area.value = text;
+  area.setAttribute('readonly', 'readonly');
+  area.style.position = 'fixed';
+  area.style.top = '-1000px';
+  document.body.appendChild(area);
+  area.select();
+
+  var done = false;
+
+  try {
+    done = document.execCommand('copy');
+  } catch (error) {
+    done = false;
+  }
+
+  document.body.removeChild(area);
+  toast(done ? message : 'El navegador bloqueó el portapapeles.');
+}
+
+function toast(message) {
+  var node = id('tooltip');
+
+  node.innerHTML = '<div class="tooltip-title">' + esc(message) + '</div>';
+  node.style.left = '50%';
+  node.style.top = 'auto';
+  node.style.bottom = '22px';
+  node.style.transform = 'translateX(-50%)';
+  node.classList.add('is-on');
+
+  clearTimeout(toast.timer);
+
+  toast.timer = setTimeout(function() {
+    node.classList.remove('is-on');
+    node.style.bottom = '';
+    node.style.transform = '';
+  }, 2600);
+}
+</script>

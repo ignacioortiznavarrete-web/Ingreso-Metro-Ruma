@@ -1,0 +1,970 @@
+<script>
+/* =====================================================================
+ * MetroRuma · bitácora semanal
+ *
+ * Mapa de cumplimiento por semana y los apuntes que el comprador revisa,
+ * corrige y guarda en la hoja Apuntes.
+ * ===================================================================== */
+
+/* =====================================================================
+ * SEMANA · MAPA Y APUNTES
+ * ===================================================================== */
+
+function renderWeekOptions() {
+  var select = id('fWeek');
+  var previous = select.value;
+
+  fillSelect('fWeek', WEEKS.map(function(week) {
+    return {
+      value: week.key,
+      label: week.label + (week.live ? ' · en curso' : '')
+    };
+  }), null);
+
+  var live = WEEKS.filter(function(week) { return week.live; })[0];
+  var last = WEEKS[WEEKS.length - 1];
+
+  select.value = (previous && WEEKS.some(function(week) {
+    return week.key === previous;
+  })) ? previous : ((live || last || {}).key || '');
+
+  WEEK_SHOWN = select.value;
+}
+
+function currentWeek() {
+  var key = id('fWeek').value;
+
+  return WEEKS.filter(function(week) {
+    return week.key === key;
+  })[0] || WEEKS[WEEKS.length - 1] || null;
+}
+
+function renderWeekView() {
+  renderHeatmap();
+  ensureDrafts();
+  renderNotes();
+}
+
+/**
+ * La semana llega con los borradores ya redactados. Solo se recalculan
+ * si nunca se han visto y todavía no hay apuntes guardados.
+ */
+function ensureDrafts() {
+  var week = currentWeek();
+
+  if (!week || DRAFTS[week.key]) { return; }
+
+  DRAFTS[week.key] = savedNotes(week.key).length ? [] : buildDrafts(week);
+}
+
+function heatColor(compliance) {
+  if (compliance === null || compliance === undefined) {
+    return null;
+  }
+
+  if (compliance >= 1.30) { return ['#1b2c4a', '#ffffff']; }
+  if (compliance >= 1.15) { return ['#24395e', '#ffffff']; }
+  if (compliance >= 1.05) { return ['#4d719f', '#ffffff']; }
+  if (compliance >= 0.95) { return ['#bcd0e6', '#1c3358']; }
+  if (compliance >= 0.85) { return ['#f7c9a4', '#7a3208']; }
+  if (compliance >= 0.70) { return ['#ec8f4a', '#3d1802']; }
+  return ['#b0301f', '#ffffff'];
+}
+
+function renderHeatmap() {
+  var host = id('heatmap');
+
+  if (!WEEKS.length) {
+    host.innerHTML = '';
+    id('heatScale').innerHTML = '';
+    return;
+  }
+
+  var names = [];
+  var seen = {};
+
+  WEEKS.forEach(function(week) {
+    week.lines.forEach(function(line) {
+      if (line.monthPlan > 0 && !seen[line.provider]) {
+        seen[line.provider] = true;
+        names.push(line.provider);
+      }
+    });
+  });
+
+  names.sort(function(a, b) {
+    var pa = SUMMARY.filter(function(item) { return item.provider === a; })[0];
+    var pb = SUMMARY.filter(function(item) { return item.provider === b; })[0];
+    return (pb ? pb.plan : 0) - (pa ? pa.plan : 0);
+  });
+
+  if (!names.length) {
+    host.innerHTML = '<p class="panel-note" style="padding:14px 0">' +
+      'No hay proveedores con plan para cruzar por semana.</p>';
+    id('heatScale').innerHTML = '';
+    return;
+  }
+
+  host.style.gridTemplateColumns =
+    'minmax(130px, auto) repeat(' + WEEKS.length + ', minmax(66px, 1fr))';
+
+  var cells = ['<div class="heat-head" style="text-align:left"></div>'];
+
+  WEEKS.forEach(function(week) {
+    cells.push('<div class="heat-head">' + esc(week.label) +
+      (week.live ? ' ·' : '') + '</div>');
+  });
+
+  names.forEach(function(name) {
+    cells.push('<div class="heat-name">' + esc(clip(name, 24)) + '</div>');
+
+    WEEKS.forEach(function(week) {
+      var line = week.lines.filter(function(item) {
+        return item.provider === name;
+      })[0];
+
+      if (!line || line.plan <= 0) {
+        cells.push('<div class="heat-cell is-void" title="Sin plan esa semana">—</div>');
+        return;
+      }
+
+      var colors = heatColor(line.compliance);
+
+      cells.push('<div class="heat-cell" style="background:' + colors[0] +
+        ';color:' + colors[1] + '" data-tip="' +
+        esc(tipRow(name + ' · ' + week.label, [
+          ['Plan de la semana', fmt(line.plan) + ' MR'],
+          ['Recibido', fmt(line.received) + ' MR'],
+          ['Desvío', signed(line.deviation) + ' MR'],
+          ['Cumplimiento', pctText(line.compliance)]
+        ])) + '">' +
+        Math.round((line.compliance || 0) * 100) + '%</div>');
+    });
+  });
+
+  host.innerHTML = cells.join('');
+  bindTips(host);
+
+  id('heatScale').innerHTML = [
+    ['#b0301f', 'menos de 70%'],
+    ['#ec8f4a', '70 a 85%'],
+    ['#f7c9a4', '85 a 95%'],
+    ['#bcd0e6', 'en línea'],
+    ['#4d719f', '105 a 115%'],
+    ['#24395e', 'sobre 115%']
+  ].map(function(pair) {
+    return '<span class="heat-scale-chip">' +
+      '<span class="heat-scale-swatch" style="background:' + pair[0] +
+      '"></span>' + esc(pair[1]) + '</span>';
+  }).join('');
+}
+
+/**
+ * Redacta el diagnóstico y el plan de acción con los números de la
+ * semana y del mes, como los escribiría el comprador antes de llamar.
+ */
+function draftFor(week, line) {
+  var provider = SUMMARY.filter(function(item) {
+    return item.provider === line.provider;
+  })[0];
+
+  var wd = workdays();
+  var days = week.daysElapsed;
+  var dayWord = days === 1 ? 'día hábil' : 'días hábiles';
+  var diagnosis = [];
+  var action = [];
+
+  var slack = SUMMARY
+    .filter(function(item) {
+      return item.provider !== line.provider && item.gapToDate > 0;
+    })
+    .sort(function(a, b) { return b.gapToDate - a.gapToDate; })[0];
+
+  if (line.received <= 0 && line.plan > 0) {
+    diagnosis.push(
+      'Sin recepciones en la semana con un plan de ' + fmt(line.plan) +
+      ' MR para los ' + days + ' ' + dayWord + ' corridos.'
+    );
+
+    action.push(
+      'Confirmar hoy estado de faena, disponibilidad de camiones y fecha ' +
+      'de reposición.'
+    );
+  } else if (line.band === 'crit') {
+    diagnosis.push(
+      'Recibió ' + fmt(line.received) + ' MR contra ' + fmt(line.plan) +
+      ' MR de plan para los ' + days + ' ' + dayWord + ' corridos: faltan ' +
+      fmt(Math.abs(line.deviation)) + ' MR (' + pctText(line.compliance) +
+      ' de cumplimiento).'
+    );
+
+    action.push(
+      'Llamar hoy: pedir causa raíz (faena, camiones, cancha o clima) y ' +
+      'comprometer por escrito fecha y volumen de recuperación.'
+    );
+  } else if (line.band === 'warn') {
+    diagnosis.push(
+      'Recibió ' + fmt(line.received) + ' MR contra ' + fmt(line.plan) +
+      ' MR de plan para los ' + days + ' ' + dayWord + ' corridos: faltan ' +
+      fmt(Math.abs(line.deviation)) + ' MR (' + pctText(line.compliance) +
+      ' de cumplimiento).'
+    );
+
+    action.push(
+      'Avisar la brecha y acordar el volumen de recuperación de la ' +
+      'próxima semana.'
+    );
+  } else if (line.band === 'over') {
+    diagnosis.push(
+      'Recibió ' + fmt(line.received) + ' MR contra ' + fmt(line.plan) +
+      ' MR de plan: ' + fmt(line.deviation) + ' MR por sobre lo programado (' +
+      pctText(line.compliance) + ').'
+    );
+
+    action.push(
+      'Revisar capacidad de cancha y antigüedad de la ruma antes de ' +
+      'seguir recibiendo.'
+    );
+  } else {
+    diagnosis.push(
+      'Recibió ' + fmt(line.received) + ' MR contra ' + fmt(line.plan) +
+      ' MR de plan (' + pctText(line.compliance) + '): dentro del corredor.'
+    );
+
+    action.push('Sin acción. Mantener seguimiento semanal.');
+  }
+
+  if (provider) {
+    if (provider.risk > 0) {
+      diagnosis.push(
+        'En el mes proyecta cerrar en ' + fmt(provider.projection) +
+        ' MR sobre un plan de ' + fmt(provider.plan) + ' MR: ' +
+        fmt(provider.risk) + ' MR en riesgo.'
+      );
+    } else if (provider.plan > 0 && provider.projection > provider.plan) {
+      diagnosis.push(
+        'En el mes proyecta ' + fmt(provider.projection) + ' MR, ' +
+        fmt(provider.projection - provider.plan) + ' MR sobre el plan de ' +
+        fmt(provider.plan) + ' MR.'
+      );
+    }
+
+    if (provider.idleDays >= 3) {
+      diagnosis.push(
+        'Lleva ' + provider.idleDays + ' días hábiles sin registrar recepción.'
+      );
+    }
+
+    if (provider.variability !== null && provider.variability > 0.7) {
+      diagnosis.push(
+        'Entrega de forma irregular: sus despachos diarios varían ' +
+        Math.round(provider.variability * 100) + '% respecto de su promedio.'
+      );
+    }
+
+    if (
+      provider.requiredPace !== null &&
+      provider.requiredPace > 0 &&
+      wd.remaining > 0
+    ) {
+      action.push(
+        'Para cerrar el plan necesita ' + fmt(provider.requiredPace) +
+        ' MR/día hábil en los ' + wd.remaining + ' días que quedan' +
+        (provider.effort !== null && provider.effort > 1.05
+          ? ', ' + provider.effort.toFixed(1) + ' veces su ritmo actual de ' +
+            fmt(provider.pace) + ' MR/día.'
+          : ', en línea con su ritmo actual.')
+      );
+    }
+
+    if (
+      (provider.band === 'crit' ||
+        (provider.effort !== null && provider.effort > 1.4)) &&
+      slack && provider.risk > 0
+    ) {
+      action.push(
+        'Si no hay capacidad, reasignar hasta ' + fmt(provider.risk) +
+        ' MR a ' + slack.provider + ', que va ' + fmt(slack.gapToDate) +
+        ' MR sobre su plan a la fecha.'
+      );
+    }
+
+    if (provider.band === 'over' && provider.projection > provider.plan) {
+      action.push(
+        'Frenar programación por ' +
+        fmt(provider.projection - provider.plan) +
+        ' MR para no inmovilizar stock en cancha.'
+      );
+    }
+  }
+
+  return {
+    diagnosis: diagnosis.join(' '),
+    action: action.join(' ')
+  };
+}
+
+function generateDrafts() {
+  var week = currentWeek();
+
+  if (!week) { return; }
+
+  DRAFTS[week.key] = buildDrafts(week);
+  renderNotes();
+  toast(
+    DRAFTS[week.key].length +
+    ' borradores recalculados con los números de hoy.'
+  );
+}
+
+function buildDrafts(week) {
+  var saved = savedNotes(week.key);
+  var taken = {};
+
+  saved.forEach(function(note) { taken[note.provider] = true; });
+
+  var drafts = week.lines
+    .filter(function(line) {
+      if (taken[line.provider]) { return false; }
+      if (line.monthPlan <= 0 && line.received <= 0) { return false; }
+
+      return line.band === 'crit' || line.band === 'warn' ||
+        line.band === 'over' || (line.received <= 0 && line.plan > 0);
+    })
+    .map(function(line) {
+      var text = draftFor(week, line);
+
+      return {
+        id: '',
+        week: week.key,
+        start: week.start,
+        end: week.end,
+        scope: 'PROVEEDOR',
+        provider: line.provider,
+        classification: BAND_LABEL[line.band] || '',
+        plan: round(line.plan, 1),
+        received: round(line.received, 1),
+        deviation: round(line.deviation, 1),
+        compliance: line.compliance === null ? 0 : round(line.compliance, 4),
+        diagnosis: text.diagnosis,
+        action: text.action,
+        owner: '',
+        status: 'Abierto',
+        priority: line.band === 'crit'
+          ? 'Alta' : (line.band === 'over' ? 'Baja' : 'Media'),
+        draft: true
+      };
+    });
+
+  // Un apunte general del mes encabeza la semana.
+  if (!taken['__GENERAL__']) {
+    drafts.unshift(generalDraft(week));
+  }
+
+  return drafts;
+}
+
+function generalDraft(week) {
+  var wd = workdays();
+  var plan = sum(SUMMARY, 'plan');
+  var total = sum(SUMMARY, 'actual') + sum(SUMMARY, 'gmail');
+  var planToDate = plan * (wd.fraction || 0);
+  var risk = sum(SUMMARY, 'risk');
+  var pace = wd.elapsed > 0 ? total / wd.elapsed : 0;
+  var projection = pace * wd.total;
+
+  var need = wd.remaining > 0
+    ? Math.max(0, plan - total) / wd.remaining
+    : 0;
+
+  var behind = SUMMARY.filter(function(item) {
+    return item.band === 'warn' || item.band === 'crit';
+  });
+
+  var gap = SUMMARY
+    .filter(function(item) { return item.gapToDate < 0; })
+    .sort(function(a, b) { return a.gapToDate - b.gapToDate; });
+
+  var totalGap = gap.reduce(function(acc, item) {
+    return acc + Math.abs(item.gapToDate);
+  }, 0);
+
+  var head = [];
+  var running = 0;
+
+  for (var index = 0; index < gap.length; index++) {
+    running += Math.abs(gap[index].gapToDate);
+    head.push(gap[index].provider);
+    if (totalGap > 0 && running / totalGap >= 0.8) { break; }
+  }
+
+  var diagnosis =
+    'Al ' + wd.referenceDateLabel + ' se llevan ' + fmt(total) + ' MR contra ' +
+    fmt(planToDate) + ' MR de plan a la fecha (' +
+    (planToDate > 0 ? pctText(total / planToDate) : 'sin plan') + '). ' +
+    'Al ritmo de ' + fmt(pace) + ' MR por día hábil el mes cierra en ' +
+    fmt(projection) + ' MR sobre un plan de ' + fmt(plan) + ' MR' +
+    (risk > 0 ? ', con ' + fmt(risk) + ' MR en riesgo' : '') + '. ' +
+    behind.length + ' de ' + SUMMARY.length +
+    ' proveedores están bajo su plan a la fecha' +
+    (head.length
+      ? ' y ' + head.length + ' explican el 80% de la brecha: ' +
+        head.join(', ') + '.'
+      : '.');
+
+  var action = wd.remaining > 0
+    ? 'Sostener ' + fmt(need) + ' MR por día hábil en los ' + wd.remaining +
+      ' días que quedan. Priorizar los llamados en el orden de la lista ' +
+      'de ataque y confirmar compromisos antes del viernes.'
+    : 'Mes cerrado: consolidar el resultado y ajustar el plan del mes ' +
+      'siguiente con los proveedores que quedaron bajo programa.';
+
+  return {
+    id: '',
+    week: week.key,
+    start: week.start,
+    end: week.end,
+    scope: 'GENERAL',
+    provider: '__GENERAL__',
+    classification: 'Resumen del mes · ' +
+      (BAND_LABEL[band(planToDate > 0 ? total / planToDate : null, plan)] || ''),
+    plan: round(planToDate, 1),
+    received: round(total, 1),
+    deviation: round(total - planToDate, 1),
+    compliance: planToDate > 0 ? round(total / planToDate, 4) : 0,
+    diagnosis: diagnosis,
+    action: action,
+    owner: '',
+    status: 'Abierto',
+    priority: 'Alta',
+    draft: true
+  };
+}
+
+function savedNotes(weekKey) {
+  return (DATA.apuntes || []).filter(function(note) {
+    return note.week === weekKey;
+  });
+}
+
+function notesForWeek(weekKey) {
+  return savedNotes(weekKey).concat(DRAFTS[weekKey] || []);
+}
+
+function renderNotes() {
+  var host = id('notesList');
+  var week = currentWeek();
+
+  if (!week) {
+    host.innerHTML = blankState(
+      'Todavía no hay semanas con días hábiles corridos en este mes.'
+    );
+    return;
+  }
+
+  var mode = id('fNoteFilter').value;
+  var notes = notesForWeek(week.key);
+
+  id('badgeNotes').textContent = String(
+    (DATA.apuntes || []).filter(function(note) {
+      return note.status !== 'Cerrado';
+    }).length
+  );
+
+  id('badgeNotes').hidden = id('badgeNotes').textContent === '0';
+
+  if (mode === 'todos') {
+    var covered = {};
+
+    notes.forEach(function(note) { covered[note.provider] = true; });
+
+    week.lines.forEach(function(line) {
+      if (covered[line.provider]) { return; }
+      if (line.monthPlan <= 0 && line.received <= 0) { return; }
+
+      var text = draftFor(week, line);
+
+      notes.push({
+        id: '', week: week.key, start: week.start, end: week.end,
+        scope: 'PROVEEDOR', provider: line.provider,
+        classification: BAND_LABEL[line.band] || '',
+        plan: round(line.plan, 1), received: round(line.received, 1),
+        deviation: round(line.deviation, 1),
+        compliance: line.compliance === null ? 0 : round(line.compliance, 4),
+        diagnosis: text.diagnosis, action: text.action,
+        owner: '', status: 'Abierto', priority: 'Media', draft: true
+      });
+    });
+  } else if (mode === 'guardados') {
+    notes = savedNotes(week.key);
+  }
+
+  if (!notes.length) {
+    host.innerHTML = blankState(
+      mode === 'guardados'
+        ? 'Aún no guardas apuntes de esta semana. Genera los borradores, ' +
+          'corrígelos y guárdalos: quedan en la hoja Apuntes de la planilla.'
+        : 'Ningún proveedor exige acción en esta semana: todos están dentro ' +
+          'del corredor. Cambia el filtro a “Todos los proveedores” si ' +
+          'quieres dejar constancia igualmente.'
+    );
+    return;
+  }
+
+  notes.sort(function(a, b) {
+    if (a.scope !== b.scope) { return a.scope === 'GENERAL' ? -1 : 1; }
+    var rank = { Alta: 0, Media: 1, Baja: 2 };
+    return (rank[a.priority] || 1) - (rank[b.priority] || 1);
+  });
+
+  host.innerHTML = notes.map(function(note, index) {
+    return noteCard(note, index);
+  }).join('');
+
+  NOTE_FILTER = mode;
+
+  each('#notesList .note', function(card) {
+    card.querySelector('[data-act="save"]').addEventListener('click', function() {
+      saveNote(card);
+    });
+
+    var remove = card.querySelector('[data-act="delete"]');
+
+    if (remove) {
+      remove.addEventListener('click', function() {
+        deleteNote(card.dataset.noteId, card);
+      });
+    }
+
+    each('[data-key]', function(field) {
+      field.addEventListener('input', function() { markDirty(card); });
+      field.addEventListener('change', function() { markDirty(card); });
+    }, card);
+  });
+
+  updatePending();
+}
+
+/**
+ * Nada se guarda solo: la tarjeta tocada queda marcada hasta que el
+ * comprador la guarda o la descarta a conciencia.
+ */
+function markDirty(card) {
+  if (card.dataset.dirty === '1') { return; }
+
+  card.dataset.dirty = '1';
+  card.classList.add('is-dirty');
+
+  var flag = card.querySelector('[data-role="state"]');
+
+  if (flag) {
+    flag.className = 'tag tag-warn';
+    flag.textContent = 'Sin guardar';
+  }
+
+  updatePending();
+}
+
+function clearDirty(card) {
+  card.dataset.dirty = '0';
+  card.classList.remove('is-dirty');
+  updatePending();
+}
+
+function updatePending() {
+  var pending = all('#notesList .note[data-dirty="1"]').length;
+  var node = id('weekPending');
+
+  node.textContent = pending
+    ? pending + (pending === 1 ? ' sin guardar' : ' sin guardar')
+    : '';
+
+  node.hidden = pending === 0;
+  id('btnSaveAll').classList.toggle('btn-hiviz', pending > 0);
+}
+
+/**
+ * Lleva al comprador desde el análisis hasta el apunte de ese proveedor,
+ * sin obligarlo a buscarlo en la lista.
+ */
+function goToNote(provider) {
+  closeDrawer();
+
+  if (VIEW !== 'semana') {
+    switchView('semana');
+
+    each('.rail-tab', function(tab) {
+      tab.setAttribute(
+        'aria-selected', tab.dataset.view === 'semana' ? 'true' : 'false'
+      );
+    });
+  }
+
+  var found = focusNote(provider);
+
+  if (!found && id('fNoteFilter').value !== 'todos') {
+    id('fNoteFilter').value = 'todos';
+    renderNotes();
+    found = focusNote(provider);
+  }
+
+  if (!found) {
+    toast('Ese proveedor no tiene movimiento ni plan en la semana elegida.');
+  }
+}
+
+function focusNote(provider) {
+  var card = document.querySelector(
+    '#notesList .note[data-provider="' + cssEscape(provider) + '"]'
+  );
+
+  if (!card) { return false; }
+
+  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  card.classList.remove('note-flash');
+  void card.offsetWidth;
+  card.classList.add('note-flash');
+  card.querySelector('textarea[data-key="action"]').focus();
+
+  return true;
+}
+
+function cssEscape(value) {
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
+function noteCard(note, index) {
+  var general = note.scope === 'GENERAL';
+  var name = general ? 'Resumen del mes' : note.provider;
+
+  var bandKey = general
+    ? band(note.compliance, note.plan || 1)
+    : bandFromLabel(note.classification);
+
+  return '<article class="note' + (note.draft ? ' is-draft' : '') +
+    '" data-note-id="' + esc(note.id) + '" data-provider="' +
+    esc(note.provider) + '" data-scope="' + esc(note.scope) +
+    '" data-classification="' + esc(note.classification) +
+    '" data-plan="' + note.plan + '" data-received="' + note.received +
+    '" data-deviation="' + note.deviation +
+    '" data-compliance="' + note.compliance +
+    '" style="--i:' + index + '">' +
+
+    '<div class="note-head">' +
+      '<span class="note-name">' + esc(name) + '</span>' +
+      tagFor(bandKey) +
+      (note.draft
+        ? '<span class="tag tag-warn" data-role="state">Borrador</span>'
+        : '<span class="tag tag-ok" data-role="state">Guardado</span>') +
+      '<div class="note-figures">' +
+        '<span class="note-figure">Plan <b>' + fmt(note.plan) + '</b></span>' +
+        '<span class="note-figure">Recibido <b>' + fmt(note.received) +
+          '</b></span>' +
+        '<span class="note-figure">Desvío <b>' + signed(note.deviation) +
+          '</b></span>' +
+        '<span class="note-figure">Cumpl. <b>' +
+          (note.compliance ? pctText(note.compliance) : '—') + '</b></span>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="note-grid">' +
+      '<label class="field">' +
+        '<span class="field-label">Diagnóstico</span>' +
+        '<textarea class="textarea" data-key="diagnosis" rows="4">' +
+          esc(note.diagnosis) + '</textarea>' +
+      '</label>' +
+      '<label class="field">' +
+        '<span class="field-label">Plan de acción</span>' +
+        '<textarea class="textarea" data-key="action" rows="4">' +
+          esc(note.action) + '</textarea>' +
+      '</label>' +
+    '</div>' +
+
+    '<div class="note-foot">' +
+      '<label class="field">' +
+        '<span class="field-label">Responsable</span>' +
+        '<input class="input" data-key="owner" value="' +
+          esc(note.owner) + '" placeholder="Quién lo toma">' +
+      '</label>' +
+      '<label class="field">' +
+        '<span class="field-label">Estado</span>' +
+        select_(['Abierto', 'En curso', 'Cerrado'], note.status, 'status') +
+      '</label>' +
+      '<label class="field">' +
+        '<span class="field-label">Prioridad</span>' +
+        select_(['Alta', 'Media', 'Baja'], note.priority, 'priority') +
+      '</label>' +
+      (note.updatedAt
+        ? '<span class="note-saved">Actualizado ' + esc(note.updatedAt) +
+          (note.author ? ' · ' + esc(note.author) : '') + '</span>'
+        : '') +
+      '<div class="note-foot-actions">' +
+        (note.id
+          ? '<button type="button" class="btn btn-sm" data-act="delete">' +
+            'Eliminar</button>'
+          : '') +
+        '<button type="button" class="btn btn-sm btn-solid" data-act="save">' +
+          'Guardar</button>' +
+      '</div>' +
+    '</div>' +
+  '</article>';
+}
+
+function select_(options, value, key) {
+  return '<select class="select" data-key="' + key + '">' +
+    options.map(function(option) {
+      return '<option value="' + esc(option) + '"' +
+        (option === value ? ' selected' : '') + '>' + esc(option) +
+        '</option>';
+    }).join('') + '</select>';
+}
+
+function bandFromLabel(label) {
+  var map = {
+    'Sobre stock': 'over',
+    'En línea': 'ok',
+    'Bajo stock': 'warn',
+    'Bajo stock crítico': 'crit',
+    'Sin plan': 'void'
+  };
+
+  return map[label] || 'ok';
+}
+
+function readCard(card) {
+  var week = currentWeek();
+
+  var note = {
+    id: card.dataset.noteId || '',
+    week: week.key,
+    start: week.start,
+    end: week.end,
+    scope: card.dataset.scope,
+    provider: card.dataset.provider,
+    classification: card.dataset.classification || '',
+    plan: Number(card.dataset.plan) || 0,
+    received: Number(card.dataset.received) || 0,
+    deviation: Number(card.dataset.deviation) || 0,
+    compliance: Number(card.dataset.compliance) || 0
+  };
+
+  each('[data-key]', function(field) {
+    note[field.dataset.key] = field.value;
+  }, card);
+
+  return note;
+}
+
+function saveNote(card) {
+  pushNotes([readCard(card)], card);
+}
+
+function saveWeek() {
+  var cards = Array.prototype.slice.call(all('#notesList .note'));
+
+  if (!cards.length) {
+    toast('No hay apuntes que guardar en esta semana.');
+    return;
+  }
+
+  pushNotes(cards.map(readCard), null);
+}
+
+function pushNotes(notes, card) {
+  if (BUSY) { return; }
+
+  setBusy(true, true);
+
+  google.script.run
+    .withSuccessHandler(function(list) {
+      DATA.apuntes = list || [];
+
+      var week = currentWeek();
+
+      if (week && DRAFTS[week.key]) {
+        var stored = {};
+
+        DATA.apuntes.forEach(function(note) {
+          if (note.week === week.key) { stored[note.provider] = true; }
+        });
+
+        DRAFTS[week.key] = DRAFTS[week.key].filter(function(draft) {
+          return !stored[draft.provider];
+        });
+      }
+
+      setBusy(false, true);
+
+      each('#notesList .note', clearDirty);
+      renderNotes();
+
+      toast(
+        notes.length === 1
+          ? 'Apunte guardado en la hoja Apuntes.'
+          : notes.length + ' apuntes guardados en la hoja Apuntes.'
+      );
+
+      if (card) { card.classList.add('note-flash'); }
+    })
+    .withFailureHandler(function(error) {
+      setBusy(false, true);
+      showError(
+        'No se pudo guardar: ' +
+        ((error && error.message) ? error.message : String(error))
+      );
+    })
+    .guardarApuntes(notes);
+}
+
+function deleteNote(noteId, card) {
+  if (!noteId || BUSY) { return; }
+
+  setBusy(true, true);
+
+  google.script.run
+    .withSuccessHandler(function(list) {
+      DATA.apuntes = list || [];
+      setBusy(false, true);
+      renderNotes();
+      toast('Apunte eliminado.');
+    })
+    .withFailureHandler(function(error) {
+      setBusy(false, true);
+      showError(
+        'No se pudo eliminar: ' +
+        ((error && error.message) ? error.message : String(error))
+      );
+    })
+    .eliminarApunte(noteId);
+}
+
+/* =====================================================================
+ * INFORME DE LA SEMANA
+ * Lo que el comprador manda por correo el viernes.
+ * ===================================================================== */
+
+function weekReportLines() {
+  var week = currentWeek();
+
+  if (!week) { return []; }
+
+  var wd = workdays();
+  var cards = Array.prototype.slice.call(all('#notesList .note'));
+  var notes = cards.map(readCard);
+
+  var lines = [
+    'METRORUMA · INFORME SEMANAL',
+    cap(DATA.month.label) + ' · semana ' + week.label +
+      (week.live ? ' (en curso)' : ''),
+    'Corte al ' + wd.referenceDateLabel + ' · ' + week.daysElapsed +
+      ' de ' + week.days + ' días hábiles de la semana',
+    '',
+    'LA SEMANA',
+    'Plan: ' + fmt(week.plan) + ' MR',
+    'Recibido: ' + fmt(week.received) + ' MR',
+    'Desvío: ' + signed(week.deviation) + ' MR' +
+      (week.compliance !== null ? ' (' + pctText(week.compliance) + ')' : ''),
+    ''
+  ];
+
+  var general = notes.filter(function(note) {
+    return note.scope === 'GENERAL';
+  })[0];
+
+  if (general) {
+    lines.push('EL MES');
+    lines.push(general.diagnosis);
+    lines.push('');
+    lines.push('QUÉ HAY QUE SOSTENER');
+    lines.push(general.action);
+    lines.push('');
+  }
+
+  var actions = notes
+    .filter(function(note) {
+      return note.scope !== 'GENERAL' && note.status !== 'Cerrado';
+    })
+    .sort(function(a, b) {
+      var rank = { Alta: 0, Media: 1, Baja: 2 };
+      return (rank[a.priority] || 1) - (rank[b.priority] || 1);
+    });
+
+  if (actions.length) {
+    lines.push('COMPROMISOS POR PROVEEDOR');
+
+    actions.forEach(function(note, index) {
+      lines.push('');
+      lines.push(
+        (index + 1) + '. ' + note.provider + ' · ' + note.classification +
+        ' · prioridad ' + note.priority.toLowerCase()
+      );
+      lines.push(
+        '   Plan ' + fmt(note.plan) + ' MR · recibido ' +
+        fmt(note.received) + ' MR · desvío ' + signed(note.deviation) + ' MR'
+      );
+      lines.push('   ' + note.diagnosis);
+      lines.push('   Acción: ' + note.action);
+
+      if (note.owner) {
+        lines.push('   Responsable: ' + note.owner + ' (' + note.status + ')');
+      }
+    });
+  } else {
+    lines.push('Ningún proveedor con compromiso abierto esta semana.');
+  }
+
+  return lines;
+}
+
+function copyWeekReport() {
+  var lines = weekReportLines();
+
+  if (!lines.length) {
+    toast('No hay una semana seleccionada.');
+    return;
+  }
+
+  copyText(
+    lines.join('\n'),
+    'Informe de la semana copiado. Pégalo en el correo.'
+  );
+}
+
+/**
+ * Imprime solo la bitácora: la hoja de estilos de impresión oculta el
+ * riel, los filtros y las vistas que no están abiertas.
+ */
+function printWeek() {
+  if (VIEW !== 'semana') { switchView('semana'); }
+
+  // Un textarea imprime solo lo que se ve: hay que abrirlo antes.
+  var boxes = Array.prototype.slice.call(all('#notesList textarea'));
+  var heights = boxes.map(function(box) { return box.style.height; });
+
+  boxes.forEach(function(box) {
+    box.style.height = 'auto';
+    box.style.height = (box.scrollHeight + 4) + 'px';
+  });
+
+  window.setTimeout(function() {
+    window.print();
+
+    boxes.forEach(function(box, index) {
+      box.style.height = heights[index];
+    });
+  }, 140);
+}
+
+function blankState(text) {
+  return '<div class="blank">' +
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+      '<path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" ' +
+        'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>' +
+      '<path d="M14 4v5h5M8 13h8M8 17h5" stroke="currentColor" ' +
+        'stroke-width="1.5" stroke-linecap="round"/>' +
+    '</svg>' +
+    '<div class="blank-title">Sin apuntes en esta semana</div>' +
+    '<p class="blank-text">' + esc(text) + '</p>' +
+  '</div>';
+}
+</script>

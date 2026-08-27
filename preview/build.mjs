@@ -282,9 +282,16 @@ if (existsSync(localFonts)) {
       '<link rel="stylesheet" href="fonts/fonts.css">');
 }
 
+const modules = ['Base', 'Analisis', 'Graficos', 'Tablero', 'Bitacora'];
+
+// Ojo: el reemplazo va como función. Con un string, replace() interpreta
+// $& y $' dentro del contenido insertado y corrompe el código.
 let html = read('Index.html')
-  .replace("<?!= include('Estilos'); ?>", styles + mock)
-  .replace("<?!= include('Panel'); ?>", read('Panel.html'));
+  .replace("<?!= include('Estilos'); ?>", () => styles + mock);
+
+for (const name of modules) {
+  html = html.replace(`<?!= include('${name}'); ?>`, () => read(`${name}.html`));
+}
 
 mkdirSync(join(here, 'out'), { recursive: true });
 writeFileSync(join(here, 'out', 'index.html'), html);

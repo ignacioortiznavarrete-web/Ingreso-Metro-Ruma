@@ -123,7 +123,13 @@
           <path d="M12 7v6M12 16.5v.5" stroke="currentColor"
                 stroke-width="1.8" stroke-linecap="round"/>
         </svg>
-        <div class="notice-body" id="bannerErrorText"></div>
+        <div class="notice-body">
+          <div id="bannerErrorText"></div>
+          <p class="notice-hint" id="bannerErrorHint"></p>
+          <button type="button" class="btn btn-sm" id="btnRetry">
+            Reintentar
+          </button>
+        </div>
       </div>
 
       <div class="notice notice-warn" id="bannerWarn" hidden>
@@ -382,6 +388,7 @@
                     <th class="n sortable" data-sort="idleDays" scope="col">
                       Sin recibir <span class="sort-caret">▾</span>
                     </th>
+                    <th scope="col">Tendencia</th>
                   </tr>
                 </thead>
                 <tbody id="providerBody"></tbody>
@@ -414,7 +421,16 @@
           </div>
 
           <div class="week-bar-actions">
-            <button type="button" class="btn" id="btnDraft">Recalcular borradores</button>
+            <span class="pending" id="weekPending" hidden></span>
+            <button type="button" class="btn" id="btnWeekReport">
+              Copiar informe
+            </button>
+            <button type="button" class="btn" id="btnWeekPrint">
+              Imprimir
+            </button>
+            <button type="button" class="btn" id="btnDraft">
+              Recalcular borradores
+            </button>
             <button type="button" class="btn btn-solid" id="btnSaveAll">
               Guardar la semana
             </button>
@@ -493,23 +509,41 @@
                 <option value="INGRESOS">Solo Ingresos</option>
                 <option value="GMAIL">Solo Gmail</option>
               </select>
-              <span class="stamp"><span class="stamp-value" id="detailCount">—</span></span>
+              <span class="stamp">
+                <span class="stamp-value" id="detailCount">—</span>
+              </span>
+              <button type="button" class="btn btn-sm" id="btnDetailAll" hidden>
+                Ver todas
+              </button>
+              <button type="button" class="btn btn-sm" id="btnDetailCopy">
+                Copiar
+              </button>
             </div>
           </div>
 
           <div class="panel-body panel-body-flush">
             <div class="table-wrap">
-              <table class="table">
+              <table class="table" id="detailTable">
                 <thead>
                   <tr>
-                    <th scope="col">Fecha</th>
-                    <th scope="col">Fuente</th>
-                    <th scope="col">Proveedor</th>
+                    <th class="sortable" data-sort="fecha" scope="col">
+                      Fecha <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="sortable" data-sort="source" scope="col">
+                      Fuente <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="sortable" data-sort="provider" scope="col">
+                      Proveedor <span class="sort-caret">▾</span>
+                    </th>
                     <th scope="col">Nombre original</th>
                     <th scope="col">Predio / Rol</th>
                     <th scope="col">Estatus</th>
-                    <th class="n" scope="col">Cumplimiento</th>
-                    <th class="n" scope="col">Cantidad</th>
+                    <th class="n sortable" data-sort="cumplimiento" scope="col">
+                      Cumplimiento <span class="sort-caret">▾</span>
+                    </th>
+                    <th class="n sortable" data-sort="cantidad" scope="col">
+                      Cantidad <span class="sort-caret">▾</span>
+                    </th>
                     <th scope="col">Homologación</th>
                   </tr>
                 </thead>
@@ -547,6 +581,10 @@
   </div>
 </div>
 
-<?!= include('Panel'); ?>
+<?!= include('Base'); ?>
+<?!= include('Analisis'); ?>
+<?!= include('Graficos'); ?>
+<?!= include('Tablero'); ?>
+<?!= include('Bitacora'); ?>
 </body>
 </html>

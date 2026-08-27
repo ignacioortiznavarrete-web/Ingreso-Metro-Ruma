@@ -1,0 +1,406 @@
+<script>
+/* =====================================================================
+ * MetroRuma · métricas
+ *
+ * Todo el cálculo ocurre en el navegador sobre las filas que entrega
+ * getDashboardData(). El servidor solo lee planillas y guarda apuntes.
+ * ===================================================================== */
+
+/* =====================================================================
+ * FILTRO Y ANÁLISIS
+ * ===================================================================== */
+
+function workdays() {
+  return (DATA && DATA.workdays) || {
+    total: 0, elapsed: 0, remaining: 0, fraction: 0,
+    referenceDate: '', referenceDateLabel: '—',
+    workdayKeys: [], workdaysByWeek: {}, holidays: []
+  };
+}
+
+function filteredRows(ignoreSource) {
+  var from = dateInput('fFrom');
+  var to = dateInput('fTo');
+  var provider = id('fProvider').value;
+  var source = ignoreSource ? '' : id('fSource').value;
+  var search = norm(id('fSearch').value);
+
+  return (DATA.rows || []).filter(function(row) {
+    if (from && row.fecha < from) { return false; }
+    if (to && row.fecha > to) { return false; }
+    if (provider && row.provider !== provider) { return false; }
+    if (source && row.source !== source) { return false; }
+
+    if (search) {
+      var hay = norm([
+        row.provider, row.providerRaw, row.predio,
+        row.rol, row.material, row.descripcion
+      ].join(' '));
+
+      if (hay.indexOf(search) === -1) { return false; }
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Métricas por proveedor. Además del cruce plan/real agrega lo que un
+ * comprador necesita para decidir: metros en riesgo al cierre, ritmo
+ * exigido, días hábiles sin recibir y regularidad de las entregas.
+ */
+function buildSummary(rows) {
+  var wd = workdays();
+  var fraction = wd.fraction || 0;
+  var elapsed = wd.elapsed || 0;
+  var totalDays = wd.total || 0;
+  var remaining = wd.remaining || 0;
+  var reference = wd.referenceDate || '';
+  var providerFilter = id('fProvider').value;
+
+  var planMap = {};
+
+  (DATA.plan || []).forEach(function(item) {
+    if (providerFilter && item.provider !== providerFilter) { return; }
+    planMap[item.provider] =
+      (planMap[item.provider] || 0) + (Number(item.plan) || 0);
+  });
+
+  var agg = {};
+
+  rows.forEach(function(row) {
+    var bucket = agg[row.provider];
+
+    if (!bucket) {
+      bucket = agg[row.provider] = {
+        actual: 0, gmail: 0, lastDate: '', byDate: {}
+      };
+    }
+
+    var amount = Number(row.cantidad) || 0;
+
+    if (row.source === 'GMAIL') {
+      bucket.gmail += amount;
+    } else {
+      bucket.actual += amount;
+    }
+
+    bucket.byDate[row.fecha] = (bucket.byDate[row.fecha] || 0) + amount;
+
+    if (amount > 0 && row.fecha > bucket.lastDate) {
+      bucket.lastDate = row.fecha;
+    }
+  });
+
+  var providers = uniq(
+    Object.keys(planMap).concat(Object.keys(agg))
+  );
+
+  return providers.map(function(provider) {
+    var bucket = agg[provider] || { actual: 0, gmail: 0, lastDate: '', byDate: {} };
+    var plan = planMap[provider] || 0;
+    var actual = bucket.actual;
+    var gmail = bucket.gmail;
+    var total = actual + gmail;
+
+    var planToDate = plan * fraction;
+    var gapToDate = total - planToDate;
+    var complianceToDate = planToDate > 0 ? total / planToDate : null;
+    var compliance = plan > 0 ? total / plan : null;
+
+    var pace = elapsed > 0 ? total / elapsed : 0;
+    var projection = elapsed > 0 ? pace * totalDays : total;
+    var projectedCompliance = plan > 0 ? projection / plan : null;
+
+    var requiredPace = remaining > 0
+      ? Math.max(0, plan - total) / remaining
+      : null;
+
+    // Cuánto del plan se pierde si no cambia nada.
+    var risk = plan > 0 ? Math.max(0, plan - projection) : 0;
+
+    // Días hábiles sin recepción hasta la fecha de corte.
+    var idleDays = bucket.lastDate
+      ? countWorkdaysBetween(bucket.lastDate, reference)
+      : (plan > 0 ? elapsed : 0);
+
+    // Regularidad: desviación relativa de las entregas diarias.
+    var daily = (wd.workdayKeys || [])
+      .filter(function(key) { return key <= reference; })
+      .map(function(key) { return bucket.byDate[key] || 0; });
+
+    return {
+      provider: provider,
+      plan: plan,
+      planToDate: planToDate,
+      actual: actual,
+      gmail: gmail,
+      total: total,
+      gapToDate: gapToDate,
+      gapToPlan: total - plan,
+      compliance: compliance,
+      complianceToDate: complianceToDate,
+      pace: pace,
+      projection: projection,
+      projectedCompliance: projectedCompliance,
+      requiredPace: requiredPace,
+      effort: (requiredPace !== null && pace > 0)
+        ? requiredPace / pace
+        : null,
+      risk: risk,
+      idleDays: idleDays,
+      lastDate: bucket.lastDate,
+      variability: variation(daily),
+      band: band(complianceToDate, plan)
+    };
+  })
+  .filter(function(item) {
+    return item.plan !== 0 || item.actual !== 0 || item.gmail !== 0;
+  })
+  .sort(function(a, b) { return b.risk - a.risk || b.total - a.total; });
+}
+
+function band(compliance, plan) {
+  if (!plan) { return 'void'; }
+  if (compliance === null) { return 'void'; }
+  if (compliance >= BANDS.over) { return 'over'; }
+  if (compliance >= BANDS.ok) { return 'ok'; }
+  if (compliance >= BANDS.warn) { return 'warn'; }
+  return 'crit';
+}
+
+var BAND_LABEL = {
+  over: 'Sobre stock',
+  ok: 'En línea',
+  warn: 'Bajo stock',
+  crit: 'Bajo stock crítico',
+  void: 'Sin plan'
+};
+
+var BAND_COLOR = {
+  over: PALETTE.brand,
+  ok: PALETTE.brand3,
+  warn: PALETTE.hiviz,
+  crit: PALETTE.crit,
+  void: PALETTE.line2
+};
+
+/**
+ * Serie diaria: real, complemento y acumulado por día hábil.
+ * Lo recibido en días no hábiles se suma al siguiente día hábil, que es
+ * como lo contabiliza la operación.
+ */
+function buildDaily(rows) {
+  var wd = workdays();
+  var keys = wd.workdayKeys || [];
+  var byDate = {};
+
+  rows.forEach(function(row) {
+    var slot = byDate[row.fecha];
+
+    if (!slot) { slot = byDate[row.fecha] = { actual: 0, gmail: 0 }; }
+
+    if (row.source === 'GMAIL') {
+      slot.gmail += Number(row.cantidad) || 0;
+    } else {
+      slot.actual += Number(row.cantidad) || 0;
+    }
+  });
+
+  var dates = Object.keys(byDate).sort();
+  var cursor = 0;
+  var running = 0;
+  var series = [];
+
+  keys.forEach(function(key) {
+    var actual = 0;
+    var gmail = 0;
+
+    while (cursor < dates.length && dates[cursor] <= key) {
+      actual += byDate[dates[cursor]].actual;
+      gmail += byDate[dates[cursor]].gmail;
+      cursor++;
+    }
+
+    running += actual + gmail;
+
+    series.push({
+      key: key,
+      label: dmy(key),
+      actual: actual,
+      gmail: gmail,
+      total: actual + gmail,
+      cumulative: running,
+      elapsed: key <= (wd.referenceDate || '')
+    });
+  });
+
+  return series;
+}
+
+/**
+ * Semanas ISO del mes con su plan prorrateado y lo recibido.
+ */
+function buildWeeks(rows, summary) {
+  var wd = workdays();
+  var keys = wd.workdayKeys || [];
+  var reference = wd.referenceDate || '';
+  var totalDays = keys.length;
+
+  if (!totalDays) { return []; }
+
+  var planByProvider = {};
+
+  summary.forEach(function(item) {
+    planByProvider[item.provider] = item.plan;
+  });
+
+  var order = [];
+  var buckets = {};
+
+  keys.forEach(function(key) {
+    var week = isoWeek(key);
+    var bucket = buckets[week];
+
+    if (!bucket) {
+      bucket = buckets[week] = {
+        key: week,
+        start: key,
+        end: key,
+        days: 0,
+        daysElapsed: 0,
+        providers: {}
+      };
+      order.push(week);
+    }
+
+    if (key < bucket.start) { bucket.start = key; }
+    if (key > bucket.end) { bucket.end = key; }
+
+    bucket.days++;
+    if (key <= reference) { bucket.daysElapsed++; }
+  });
+
+  var weekOfDate = {};
+
+  keys.forEach(function(key) { weekOfDate[key] = isoWeek(key); });
+
+  // Un día no hábil se imputa a la semana del siguiente día hábil.
+  function weekFor(date) {
+    if (weekOfDate[date]) { return weekOfDate[date]; }
+
+    for (var index = 0; index < keys.length; index++) {
+      if (keys[index] >= date) { return weekOfDate[keys[index]]; }
+    }
+
+    return keys.length ? weekOfDate[keys[keys.length - 1]] : '';
+  }
+
+  rows.forEach(function(row) {
+    var week = weekFor(row.fecha);
+    var bucket = buckets[week];
+
+    if (!bucket) { return; }
+
+    var slot = bucket.providers[row.provider];
+
+    if (!slot) {
+      slot = bucket.providers[row.provider] = { actual: 0, gmail: 0 };
+    }
+
+    if (row.source === 'GMAIL') {
+      slot.gmail += Number(row.cantidad) || 0;
+    } else {
+      slot.actual += Number(row.cantidad) || 0;
+    }
+  });
+
+  return order.map(function(week) {
+    var bucket = buckets[week];
+    var live = bucket.daysElapsed > 0 && bucket.daysElapsed < bucket.days;
+
+    var lines = Object.keys(planByProvider)
+      .concat(Object.keys(bucket.providers))
+      .filter(uniqFilter())
+      .map(function(provider) {
+        var slot = bucket.providers[provider] || { actual: 0, gmail: 0 };
+        var monthPlan = planByProvider[provider] || 0;
+
+        var planFull = monthPlan * bucket.days / totalDays;
+        var planToDate = monthPlan * bucket.daysElapsed / totalDays;
+        var received = slot.actual + slot.gmail;
+        var compliance = planToDate > 0 ? received / planToDate : null;
+
+        return {
+          provider: provider,
+          planFull: planFull,
+          plan: planToDate,
+          actual: slot.actual,
+          gmail: slot.gmail,
+          received: received,
+          deviation: received - planToDate,
+          compliance: compliance,
+          band: band(compliance, monthPlan),
+          monthPlan: monthPlan
+        };
+      })
+      .filter(function(item) {
+        return item.monthPlan !== 0 || item.received !== 0;
+      })
+      .sort(function(a, b) { return a.deviation - b.deviation; });
+
+    var planTotal = lines.reduce(function(sum, item) {
+      return sum + item.plan;
+    }, 0);
+
+    var receivedTotal = lines.reduce(function(sum, item) {
+      return sum + item.received;
+    }, 0);
+
+    return {
+      key: week,
+      label: weekLabel(bucket.start, bucket.end),
+      start: bucket.start,
+      end: bucket.end,
+      days: bucket.days,
+      daysElapsed: bucket.daysElapsed,
+      live: live,
+      closed: bucket.daysElapsed >= bucket.days,
+      plan: planTotal,
+      received: receivedTotal,
+      deviation: receivedTotal - planTotal,
+      compliance: planTotal > 0 ? receivedTotal / planTotal : null,
+      lines: lines
+    };
+  }).filter(function(item) { return item.daysElapsed > 0; });
+}
+
+function countWorkdaysBetween(fromKey, toKey) {
+  var keys = workdays().workdayKeys || [];
+  var count = 0;
+
+  keys.forEach(function(key) {
+    if (key > fromKey && key <= toKey) { count++; }
+  });
+
+  return count;
+}
+
+function variation(values) {
+  var live = values.filter(function(value) { return value > 0; });
+
+  if (live.length < 2) { return null; }
+
+  var mean = live.reduce(function(a, b) { return a + b; }, 0) / live.length;
+
+  if (!mean) { return null; }
+
+  var spread = Math.sqrt(
+    live.reduce(function(sum, value) {
+      return sum + Math.pow(value - mean, 2);
+    }, 0) / live.length
+  );
+
+  return spread / mean;
+}
+</script>

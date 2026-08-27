@@ -18,6 +18,7 @@ const page = await ctx.newPage();
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push('PAGEERROR: ' + e.message));
 
+await page.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
 await page.goto(url, { waitUntil: 'networkidle' });
 await page.waitForSelector('.gauge', { timeout: 8000 });
 await page.waitForTimeout(1400);
@@ -34,12 +35,12 @@ for (const [name, sel] of shots) {
   await page.screenshot({ path: join(out, name + '.png'), fullPage: true });
 }
 
-// Estado con borradores generados
+// Vista de impresión del informe semanal
 await page.click('#tab-semana');
-await page.waitForTimeout(400);
-await page.click('#btnDraft');
 await page.waitForTimeout(700);
-await page.screenshot({ path: join(out, 'semana-borradores.png'), fullPage: true });
+await page.emulateMedia({ media: 'print' });
+await page.screenshot({ path: join(out, 'impresion.png'), fullPage: true });
+await page.emulateMedia({ media: 'screen' });
 
 // Móvil
 const mobileCtx = await browser.newContext({
@@ -48,6 +49,7 @@ const mobileCtx = await browser.newContext({
 });
 const mobile = await mobileCtx.newPage();
 mobile.on('pageerror', (e) => errors.push('MOBILE: ' + e.message));
+await mobile.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
 await mobile.goto(url, { waitUntil: 'networkidle' });
 await mobile.waitForSelector('.gauge', { timeout: 8000 });
 await mobile.waitForTimeout(1200);

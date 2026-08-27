@@ -458,10 +458,22 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .notice-error {
+  display: flex;
   color: #8a1c14;
   background: #fdeceb;
   border-color: #f2c4c0;
+}
+
+.notice-error #bannerErrorText {
+  font-weight: 600;
   white-space: pre-wrap;
+}
+
+.notice-hint {
+  max-width: 78ch;
+  margin: 5px 0 8px;
+  color: var(--ink-2);
+  text-wrap: pretty;
 }
 
 /* =====================================================================
@@ -823,7 +835,21 @@ h1, h2, h3, p { margin: 0; }
 .table tbody tr.is-picked { background: var(--brand-wash); }
 
 .table tbody td.name { white-space: normal; min-width: 170px; }
-.table tbody td.name b { font-weight: 600; }
+
+/* El nombre es un botón real: la fila se abre también con el teclado. */
+.linkish {
+  padding: 0;
+  font-size: inherit;
+  font-weight: 600;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+}
+
+.linkish:hover { border-bottom-color: var(--brand-2); }
 
 .table tfoot td {
   position: sticky;
@@ -876,6 +902,18 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .cell-stack { display: grid; gap: 3px; justify-items: end; }
+
+/* Una casilla por semana: el mismo lenguaje del mapa de la bitácora. */
+.trend { display: inline-flex; gap: 2px; }
+
+.trend-block {
+  width: 11px;
+  height: 13px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+
+.trend-block.is-void { background: var(--panel-sunk); }
 
 /* =====================================================================
  * ETIQUETAS
@@ -935,15 +973,12 @@ h1, h2, h3, p { margin: 0; }
   align-items: baseline;
   width: 100%;
   padding: 11px 16px;
-  text-align: left;
-  cursor: pointer;
-  background: none;
-  border: 0;
   border-top: 1px solid var(--line);
   transition: background-color .16s var(--out-quart);
 }
 
 .attack-item:hover { background: var(--brand-wash); }
+.attack-item:focus-within { background: var(--brand-wash); }
 
 .attack-rank {
   font-family: var(--mono);
@@ -953,12 +988,45 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .attack-name {
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--ink);
-  overflow: hidden;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+}
+
+.attack-name:hover { border-bottom-color: var(--brand-2); }
+
+.attack-note {
+  grid-column: 2 / -1;
+  justify-self: start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--brand-2);
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  transition:
+    color .16s var(--out-quart),
+    border-color .16s var(--out-quart),
+    background-color .16s var(--out-quart);
+}
+
+.attack-note:hover {
+  color: #fff;
+  background: var(--brand-2);
+  border-color: var(--brand-2);
 }
 
 .attack-loss {
@@ -971,10 +1039,10 @@ h1, h2, h3, p { margin: 0; }
 
 .attack-why {
   grid-column: 2 / -1;
+  margin: 0;
   font-size: 10.5px;
   line-height: 1.5;
   color: var(--ink-2);
-  white-space: normal;
   text-wrap: pretty;
 }
 
@@ -1090,6 +1158,21 @@ h1, h2, h3, p { margin: 0; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--lift-1);
+}
+
+.note.is-dirty {
+  border-color: var(--hiviz);
+  box-shadow: 0 0 0 1px var(--hiviz), var(--lift-1);
+}
+
+.pending {
+  align-self: center;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--hiviz-ink);
+  background: var(--hiviz-wash);
+  border-radius: 999px;
 }
 
 .note.is-draft {
@@ -1225,6 +1308,13 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .drawer-sub { margin-top: 2px; font-size: 11px; color: var(--ink-3); }
+
+.drawer-head-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  margin-left: auto;
+}
 .drawer-body { flex: 1; overflow-y: auto; padding: 14px 16px 24px; }
 
 .drawer-section { margin-top: 18px; }
@@ -1440,10 +1530,66 @@ h1, h2, h3, p { margin: 0; }
   .heat-cell:hover { transform: none; }
 }
 
+/* =====================================================================
+ * IMPRESIÓN
+ * El informe semanal se imprime o se guarda como PDF: fuera el riel, los
+ * filtros y los controles; los apuntes se abren completos.
+ * ===================================================================== */
+
 @media print {
-  .rail, .filters, .panel-tools, .veil, .week-bar-actions { display: none; }
+  @page { margin: 14mm; }
+
+  /* La fecha de corte y los días hábiles se quedan: son la cabecera
+     del informe impreso. */
+  .rail,
+  .filterbox,
+  .panel-tools,
+  .veil,
+  .week-bar-actions,
+  .note-foot-actions,
+  .notice-info,
+  .rail-tab-badge,
+  .tooltip,
+  .scrim,
+  .drawer { display: none !important; }
+
+  body { background: #fff; font-size: 10.5px; }
   .shell { grid-template-columns: 1fr; }
-  .panel { break-inside: avoid; box-shadow: none; }
+  .topbar {
+    position: static;
+    padding: 0 0 8px;
+    background: none;
+    border-bottom: 1px solid #000;
+  }
+
+  .topbar-meta { margin-left: 0; width: 100%; }
+  .main { padding: 0; }
+
+  .panel,
+  .note,
+  .week-bar {
+    break-inside: avoid;
+    background: #fff;
+    border-color: #bbb;
+    box-shadow: none;
+  }
+
   .table-wrap { max-height: none; overflow: visible; }
+  .heat-scroll { overflow: visible; }
+
+  /* Los cuadros de texto imprimen solo lo visible: se abren enteros. */
+  .textarea,
+  .input,
+  .select {
+    height: auto;
+    overflow: visible;
+    background: none;
+    border-color: #ccc;
+  }
+
+  .heat-cell,
+  .trend-block,
+  .tag,
+  .meter-fill { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 </style>

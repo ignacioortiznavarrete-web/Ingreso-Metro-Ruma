@@ -1,0 +1,1026 @@
+<script>
+/* =====================================================================
+ * MetroRuma · motor de gráficos
+ *
+ * SVG propio, sin librerías externas: control total del color, la
+ * tipografía y la entrada de cada marca.
+ * ===================================================================== */
+
+/* =====================================================================
+ * MOTOR DE GRÁFICOS
+ * SVG propio: control total del color, la tipografía y la entrada.
+ * ===================================================================== */
+
+function px(host) {
+  return Math.max(320, host.clientWidth || 640);
+}
+
+function niceMax(value) {
+  if (!value || !isFinite(value)) { return 10; }
+
+  var exponent = Math.pow(10, Math.floor(Math.log(value) / Math.LN10));
+  var scaled = value / exponent;
+  var step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
+
+  return step * exponent;
+}
+
+function ticks(max, count) {
+  var out = [];
+  var step = max / count;
+
+  for (var index = 0; index <= count; index++) {
+    out.push(step * index);
+  }
+
+  return out;
+}
+
+function attr(map) {
+  return Object.keys(map)
+    .filter(function(key) {
+      return map[key] !== null && map[key] !== undefined && map[key] !== '';
+    })
+    .map(function(key) {
+      return key + '="' + String(map[key]).replace(/"/g, '&quot;') + '"';
+    })
+    .join(' ');
+}
+
+function tag(name, map, inner) {
+  return '<' + name + ' ' + attr(map) + '>' +
+    (inner === undefined ? '' : inner) + '</' + name + '>';
+}
+
+function hatch(idName, color) {
+  return tag('pattern', {
+    id: idName,
+    width: 5,
+    height: 5,
+    patternTransform: 'rotate(-45)',
+    patternUnits: 'userSpaceOnUse'
+  },
+    tag('rect', { width: 5, height: 5, fill: '#ffffff' }) +
+    tag('rect', { width: 2.4, height: 5, fill: color })
+  );
+}
+
+/* ---------------------------------------------------------------------
+ * LA RUMA
+ * Regla graduada del plan del mes con el avance apilado por día hábil.
+ * ------------------------------------------------------------------- */
+
+function drawRuma() {
+  var host = id('rumaFigure');
+  var wd = workdays();
+  var daily = buildDaily(ROWS);
+  var plan = sum(SUMMARY, 'plan');
+
+  if (!wd.total || !daily.length) {
+    host.innerHTML =
+      '<div class="chart-empty">No hay días hábiles configurados ' +
+      'para este mes.</div>';
+    renderReadout(null);
+    return;
+  }
+
+  var elapsed = daily.filter(function(point) { return point.elapsed; });
+  var total = elapsed.length ? elapsed[elapsed.length - 1].cumulative : 0;
+  var planToDate = plan * (wd.fraction || 0);
+  var pace = wd.elapsed > 0 ? total / wd.elapsed : 0;
+  var projection = wd.elapsed > 0 ? pace * wd.total : total;
+
+  var width = px(host);
+  var padL = 8;
+  var padR = 8;
+  var barTop = 58;
+  var barH = 66;
+  var height = 176;
+  var innerW = width - padL - padR;
+
+  // La escala se gradúa sobre el plan del mes: así la marca del plan cae
+  // en una división de la regla y no sobre un número redondo cualquiera.
+  var step = (plan > 0 ? plan : Math.max(total, projection, 1)) / 10;
+  var scaleMax = Math.max(plan, total, projection, step) * 1.04;
+  var toX = function(value) {
+    return padL + Math.max(0, Math.min(1, value / scaleMax)) * innerW;
+  };
+
+  var parts = [];
+
+  parts.push(tag('defs', {}, hatch('rumaHatch', PALETTE.brand3)));
+
+  // Regla graduada del fondo.
+  parts.push(tag('rect', {
+    x: padL, y: barTop, width: innerW, height: barH,
+    rx: 4, fill: PALETTE.sunk
+  }));
+
+  for (var mark = 1; mark * step <= scaleMax; mark++) {
+    var markValue = mark * step;
+    var major = mark % 2 === 0;
+    var isPlan = plan > 0 && Math.abs(markValue - plan) < step * 0.02;
+
+    parts.push(tag('line', {
+      x1: toX(markValue), x2: toX(markValue),
+      y1: barTop + barH, y2: barTop + barH + (major ? 9 : 5),
+      stroke: PALETTE.line2, 'stroke-width': 1
+    }));
+
+    if (major && !isPlan) {
+      // La regla se lee como porcentaje del plan; los metros ruma
+      // exactos ya están en la lectura de abajo.
+      parts.push(tag('text', {
+        x: toX(markValue), y: barTop + barH + 22,
+        'text-anchor': 'middle', class: 'chart-axis'
+      }, plan > 0
+        ? Math.round(markValue / plan * 100) + '%'
+        : fmt(markValue)));
+    }
+  }
+
+  // Estratos: un día hábil por franja, sólido si viene de Ingresos.
+  var cursor = 0;
+  var index = 0;
+
+  elapsed.forEach(function(point) {
+    ['actual', 'gmail'].forEach(function(kind) {
+      var amount = point[kind];
+
+      if (amount <= 0) { return; }
+
+      var x0 = toX(cursor);
+      var x1 = toX(cursor + amount);
+
+      parts.push(tag('rect', {
+        x: x0, y: barTop + 2,
+        width: Math.max(0.8, x1 - x0 - 0.7), height: barH - 4,
+        fill: kind === 'gmail' ? 'url(#rumaHatch)' : PALETTE.brand,
+        stroke: kind === 'gmail' ? PALETTE.brand3 : 'none',
+        'stroke-width': kind === 'gmail' ? 0.8 : 0,
+        class: 'strata',
+        style: 'animation-delay:' + (index * 26) + 'ms',
+        'data-tip': tipRow(point.label, [
+          ['Del día', fmt(point.total) + ' MR'],
+          ['Acumulado', fmt(point.cumulative) + ' MR']
+        ])
+      }));
+
+      cursor += amount;
+      index++;
+    });
+  });
+
+  // Silueta del pronóstico.
+  if (projection > total) {
+    parts.push(tag('rect', {
+      x: toX(total), y: barTop + 2,
+      width: Math.max(1, toX(projection) - toX(total)), height: barH - 4,
+      fill: 'rgba(226,96,15,.09)',
+      stroke: PALETTE.hiviz, 'stroke-width': 1.4,
+      'stroke-dasharray': '5 4',
+      class: 'ghost'
+    }));
+
+    parts.push(tag('text', {
+      x: Math.min(width - padR, toX(projection) - 6),
+      y: barTop + barH - 9,
+      'text-anchor': 'end',
+      class: 'chart-label',
+      fill: PALETTE.hivizInk,
+      style: 'font-size:10px'
+    }, 'proyección'));
+  }
+
+  // Marca del plan a la fecha: la regla contra la que se mide hoy.
+  parts.push(flag(
+    toX(planToDate), barTop, barH,
+    'Plan al ' + wd.referenceDateLabel, fmt(planToDate),
+    PALETTE.ink, width - 96, 'end'
+  ));
+
+  // Tope de la regla: el plan del mes, rotulado una sola vez. En pantallas
+  // angostas el rótulo se omite porque ya está en la lectura de abajo.
+  if (plan > 0) {
+    parts.push(tag('line', {
+      x1: toX(plan), x2: toX(plan),
+      y1: barTop - 8, y2: barTop + barH + 4,
+      stroke: PALETTE.ink2, 'stroke-width': 1.6
+    }));
+
+    if (width >= 560) {
+      parts.push(tag('text', {
+        x: width - padR, y: barTop - 28,
+        'text-anchor': 'end', class: 'chart-label',
+        fill: PALETTE.ink3, style: 'font-size:10px'
+      }, 'Plan del mes'));
+
+      parts.push(tag('text', {
+        x: width - padR, y: barTop - 14,
+        'text-anchor': 'end', fill: PALETTE.ink2,
+        style: 'font-size:12px;font-weight:600;font-family:var(--mono)'
+      }, fmt(plan)));
+    }
+  }
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height,
+    role: 'img',
+    'aria-label':
+      'Avance de ' + fmt(total) + ' MR contra un plan a la fecha de ' +
+      fmt(planToDate) + ' MR y un plan mensual de ' + fmt(plan) + ' MR.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  renderReadout({
+    total: total, plan: plan, planToDate: planToDate,
+    projection: projection, pace: pace, wd: wd
+  });
+}
+
+function flag(x, top, barH, title, value, color, width, side) {
+  var anchor = side === 'end' ? 'end' : 'start';
+  var dx = side === 'end' ? -7 : 7;
+  var safeX = Math.max(70, Math.min(width - 70, x));
+
+  return tag('g', {}, [
+    tag('line', {
+      x1: x, x2: x, y1: top - 26, y2: top + barH + 4,
+      stroke: color, 'stroke-width': 1.6
+    }),
+    tag('circle', { cx: x, cy: top - 26, r: 2.6, fill: color }),
+    tag('text', {
+      x: safeX + dx, y: top - 28, 'text-anchor': anchor,
+      class: 'chart-label', fill: color,
+      style: 'font-size:10px;font-weight:600'
+    }, esc(title)),
+    tag('text', {
+      x: safeX + dx, y: top - 14, 'text-anchor': anchor,
+      fill: color,
+      style: 'font-size:12px;font-weight:600;font-family:var(--mono)'
+    }, esc(value))
+  ].join(''));
+}
+
+/* ---------------------------------------------------------------------
+ * CURVA DE AVANCE
+ * ------------------------------------------------------------------- */
+
+function drawCurve() {
+  var host = id('chartCurve');
+  var wd = workdays();
+  var daily = buildDaily(ROWS);
+  var plan = sum(SUMMARY, 'plan');
+
+  if (!daily.length) {
+    host.innerHTML = '<div class="chart-empty">Sin días hábiles que graficar.</div>';
+    return;
+  }
+
+  var pct = CURVE_MODE === 'pct' && plan > 0;
+  var width = px(host);
+  var height = 300;
+  var padL = pct ? 44 : 62;
+  var padR = 16;
+  var padT = 16;
+  var padB = 42;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
+
+  var count = daily.length;
+  var elapsedCount = daily.filter(function(p) { return p.elapsed; }).length;
+  var total = elapsedCount ? daily[elapsedCount - 1].cumulative : 0;
+  var pace = wd.elapsed > 0 ? total / wd.elapsed : 0;
+
+  var planAt = function(index) { return plan * (index + 1) / count; };
+  var conv = function(value, index) {
+    if (!pct) { return value; }
+    var reference = planAt(index);
+    return reference > 0 ? (value / reference) * 100 : 0;
+  };
+
+  var values = [];
+
+  daily.forEach(function(point, index) {
+    values.push(conv(planAt(index), index));
+    if (point.elapsed) { values.push(conv(point.cumulative, index)); }
+  });
+
+  if (elapsedCount) {
+    for (var i = elapsedCount - 1; i < count; i++) {
+      values.push(conv(total + pace * (i - elapsedCount + 1), i));
+      values.push(conv(
+        total + Math.max(0, plan - total) *
+          ((i - elapsedCount + 1) / Math.max(1, count - elapsedCount)),
+        i
+      ));
+    }
+  }
+
+  var maxValue = niceMax(Math.max.apply(null, values.concat([1])) * 1.05);
+  var minValue = pct ? Math.min(70, Math.floor(Math.min.apply(null, values) / 10) * 10) : 0;
+
+  var toX = function(index) {
+    return padL + (count === 1 ? innerW / 2 : (index / (count - 1)) * innerW);
+  };
+
+  var toY = function(value) {
+    var span = maxValue - minValue || 1;
+    return padT + innerH - ((value - minValue) / span) * innerH;
+  };
+
+  var parts = [];
+
+  // Rejilla y eje vertical.
+  ticks(maxValue - minValue, 4).forEach(function(offset) {
+    var value = minValue + offset;
+
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, pct ? Math.round(value) + '%' : fmt(value)));
+  });
+
+  // Corredor aceptable de ±5% sobre el plan prorrateado.
+  var bandTop = [];
+  var bandBottom = [];
+
+  daily.forEach(function(point, index) {
+    bandTop.push(toX(index) + ',' + toY(conv(planAt(index) * 1.05, index)));
+    bandBottom.push(toX(index) + ',' + toY(conv(planAt(index) * 0.95, index)));
+  });
+
+  parts.push(tag('polygon', {
+    points: bandTop.join(' ') + ' ' + bandBottom.reverse().join(' '),
+    fill: 'rgba(125,155,194,.16)'
+  }));
+
+  // Plan a la fecha.
+  parts.push(line(
+    daily.map(function(point, index) {
+      return [toX(index), toY(conv(planAt(index), index))];
+    }),
+    PALETTE.ink2, 1.6, '6 4'
+  ));
+
+  // Ritmo exigido para cerrar el plan.
+  if (elapsedCount && elapsedCount < count && plan > total) {
+    var need = [];
+
+    for (var j = elapsedCount - 1; j < count; j++) {
+      var progress = (j - elapsedCount + 1) / Math.max(1, count - elapsedCount);
+      need.push([toX(j), toY(conv(total + (plan - total) * progress, j))]);
+    }
+
+    parts.push(line(need, PALETTE.hiviz, 1.8, '3 3'));
+  }
+
+  // Proyección al ritmo actual.
+  if (elapsedCount && elapsedCount < count) {
+    var proj = [];
+
+    for (var k = elapsedCount - 1; k < count; k++) {
+      proj.push([toX(k), toY(conv(total + pace * (k - elapsedCount + 1), k))]);
+    }
+
+    parts.push(line(proj, PALETTE.brand3, 1.8, '2 4'));
+  }
+
+  // Avance real acumulado.
+  var walk = daily
+    .filter(function(point) { return point.elapsed; })
+    .map(function(point, index) {
+      return [toX(index), toY(conv(point.cumulative, index))];
+    });
+
+  if (walk.length) {
+    parts.push(area(walk, toY(minValue), 'rgba(36,57,94,.10)'));
+    parts.push(line(walk, PALETTE.brand, 2.6, null, true));
+
+    var last = walk[walk.length - 1];
+    parts.push(tag('circle', {
+      cx: last[0], cy: last[1], r: 4,
+      fill: PALETTE.brand, stroke: '#fff', 'stroke-width': 2
+    }));
+  }
+
+  // Eje de fechas.
+  var everyX = Math.max(1, Math.ceil(count / 14));
+
+  daily.forEach(function(point, index) {
+    if (index % everyX !== 0 && index !== count - 1) { return; }
+
+    parts.push(tag('text', {
+      x: toX(index), y: height - padB + 16,
+      'text-anchor': 'middle', class: 'chart-axis'
+    }, point.label.slice(0, 5)));
+  });
+
+  // Zona sensible por día para el tooltip.
+  daily.forEach(function(point, index) {
+    var slot = innerW / Math.max(1, count - 1);
+
+    parts.push(tag('rect', {
+      x: toX(index) - slot / 2, y: padT,
+      width: slot, height: innerH,
+      fill: 'transparent',
+      'data-tip': tipRow(point.label, [
+        ['Plan a la fecha', fmt(planAt(index)) + ' MR'],
+        point.elapsed
+          ? ['Avance real', fmt(point.cumulative) + ' MR']
+          : ['Avance real', 'sin dato aún'],
+        point.elapsed
+          ? ['Diferencia', signed(point.cumulative - planAt(index)) + ' MR']
+          : null
+      ])
+    }));
+  });
+
+  parts.push(legend(width, height, [
+    ['Avance acumulado', PALETTE.brand, 'solid'],
+    ['Plan a la fecha', PALETTE.ink2, 'dash'],
+    ['Corredor ±5%', 'rgba(125,155,194,.5)', 'band'],
+    ['Ritmo exigido', PALETTE.hiviz, 'dash'],
+    ['Al ritmo actual', PALETTE.brand3, 'dash']
+  ]));
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + (height + 26),
+    width: '100%', height: height + 26, role: 'img',
+    'aria-label': 'Curva de avance acumulado contra el plan prorrateado.'
+  }, parts.join(''));
+
+  bindTips(host);
+}
+
+function line(points, color, weight, dash, animate) {
+  if (!points.length) { return ''; }
+
+  var d = points.map(function(point, index) {
+    return (index ? 'L' : 'M') + round(point[0]) + ' ' + round(point[1]);
+  }).join(' ');
+
+  var length = 0;
+
+  for (var index = 1; index < points.length; index++) {
+    length += Math.hypot(
+      points[index][0] - points[index - 1][0],
+      points[index][1] - points[index - 1][1]
+    );
+  }
+
+  return tag('path', {
+    d: d, fill: 'none', stroke: color,
+    'stroke-width': weight,
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+    'stroke-dasharray': animate ? round(length) : dash,
+    class: animate ? 'trace' : null,
+    style: animate ? '--len:' + round(length) : null
+  });
+}
+
+function area(points, baseline, fill) {
+  if (!points.length) { return ''; }
+
+  var d = points.map(function(point, index) {
+    return (index ? 'L' : 'M') + round(point[0]) + ' ' + round(point[1]);
+  }).join(' ') +
+    ' L' + round(points[points.length - 1][0]) + ' ' + round(baseline) +
+    ' L' + round(points[0][0]) + ' ' + round(baseline) + ' Z';
+
+  return tag('path', { d: d, fill: fill, class: 'ghost' });
+}
+
+function legend(width, height, items) {
+  var x = 0;
+
+  return tag('g', { transform: 'translate(0,' + (height + 14) + ')' },
+    items.map(function(item) {
+      var mark = item[2] === 'band'
+        ? tag('rect', { x: x, y: -6, width: 14, height: 8, fill: item[1], rx: 1 })
+        : tag('line', {
+            x1: x, x2: x + 14, y1: -2, y2: -2,
+            stroke: item[1], 'stroke-width': 2.4,
+            'stroke-dasharray': item[2] === 'dash' ? '4 3' : null,
+            'stroke-linecap': 'round'
+          });
+
+      var label = tag('text', {
+        x: x + 19, y: 1.5, class: 'chart-label', style: 'font-size:10px'
+      }, esc(item[0]));
+
+      x += 19 + item[0].length * 5.4 + 16;
+      return mark + label;
+    }).join('')
+  );
+}
+
+/* ---------------------------------------------------------------------
+ * RECEPCIÓN DIARIA
+ * ------------------------------------------------------------------- */
+
+function drawDaily() {
+  var host = id('chartDaily');
+  var wd = workdays();
+  var daily = buildDaily(ROWS).filter(function(point) { return point.elapsed; });
+  var plan = sum(SUMMARY, 'plan');
+  var dailyPlan = wd.total ? plan / wd.total : 0;
+
+  if (!daily.length) {
+    host.innerHTML = '<div class="chart-empty">Todavía no hay recepciones ' +
+      'registradas en el rango seleccionado.</div>';
+    return;
+  }
+
+  var width = px(host);
+  var height = 300;
+  var padL = 62;
+  var padR = 16;
+  var padT = 16;
+  var padB = 42;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
+  var count = daily.length;
+
+  var maxValue = niceMax(Math.max(
+    dailyPlan * 1.25,
+    Math.max.apply(null, daily.map(function(point) { return point.total; }))
+  ) * 1.08) || 10;
+
+  var slot = innerW / count;
+  var barW = Math.max(3, Math.min(30, slot * 0.62));
+
+  var toX = function(index) { return padL + slot * (index + 0.5); };
+  var toY = function(value) {
+    return padT + innerH - (value / maxValue) * innerH;
+  };
+
+  var parts = [tag('defs', {}, hatch('dailyHatch', PALETTE.brand3))];
+
+  ticks(maxValue, 4).forEach(function(value) {
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, fmt(value)));
+  });
+
+  // Barras apiladas: primero lo real, encima el complemento.
+  daily.forEach(function(point, index) {
+    var base = padT + innerH;
+    var x = toX(index) - barW / 2;
+
+    [['actual', PALETTE.brand], ['gmail', 'url(#dailyHatch)']].forEach(
+      function(pair) {
+        var amount = point[pair[0]];
+
+        if (amount <= 0) { return; }
+
+        var h = (amount / maxValue) * innerH;
+        base -= h;
+
+        parts.push(tag('rect', {
+          x: x, y: base, width: barW, height: Math.max(1, h),
+          rx: 1.5,
+          fill: pair[1],
+          stroke: pair[0] === 'gmail' ? PALETTE.brand3 : 'none',
+          'stroke-width': pair[0] === 'gmail' ? 0.8 : 0,
+          class: 'bar-grow',
+          style: 'animation-delay:' + (index * 18) + 'ms'
+        }));
+      }
+    );
+  });
+
+  // Plan diario.
+  parts.push(line(
+    daily.map(function(point, index) { return [toX(index), toY(dailyPlan)]; }),
+    PALETTE.ink2, 1.5, '6 4'
+  ));
+
+  // Promedio móvil de 5 días hábiles: separa la tendencia del ruido.
+  if (count >= 3) {
+    var window = Math.min(5, count);
+    var moving = daily.map(function(point, index) {
+      var from = Math.max(0, index - window + 1);
+      var slice = daily.slice(from, index + 1);
+      var mean = slice.reduce(function(total, item) {
+        return total + item.total;
+      }, 0) / slice.length;
+
+      return [toX(index), toY(mean)];
+    });
+
+    parts.push(line(moving, PALETTE.hiviz, 2.4, null, true));
+  }
+
+  var everyX = Math.max(1, Math.ceil(count / 14));
+
+  daily.forEach(function(point, index) {
+    if (index % everyX !== 0 && index !== count - 1) { return; }
+
+    parts.push(tag('text', {
+      x: toX(index), y: height - padB + 16,
+      'text-anchor': 'middle', class: 'chart-axis'
+    }, point.label.slice(0, 5)));
+  });
+
+  daily.forEach(function(point, index) {
+    parts.push(tag('rect', {
+      x: padL + slot * index, y: padT, width: slot, height: innerH,
+      fill: 'transparent',
+      'data-tip': tipRow(point.label, [
+        ['Ingreso real', fmt(point.actual) + ' MR'],
+        ['Complemento', fmt(point.gmail) + ' MR'],
+        ['Total del día', fmt(point.total) + ' MR'],
+        ['Plan diario', fmt(dailyPlan) + ' MR'],
+        ['Diferencia', signed(point.total - dailyPlan) + ' MR']
+      ])
+    }));
+  });
+
+  parts.push(legend(width, height, [
+    ['Ingreso real', PALETTE.brand, 'solid'],
+    ['Complemento Gmail', PALETTE.brand3, 'solid'],
+    ['Media 5 días', PALETTE.hiviz, 'solid'],
+    ['Plan diario', PALETTE.ink2, 'dash']
+  ]));
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + (height + 26),
+    width: '100%', height: height + 26, role: 'img',
+    'aria-label': 'Recepción diaria contra el plan por día hábil.'
+  }, parts.join(''));
+
+  bindTips(host);
+}
+
+/* ---------------------------------------------------------------------
+ * DESVÍO POR PROVEEDOR
+ * ------------------------------------------------------------------- */
+
+function drawGap() {
+  var host = id('chartGap');
+  var rows = SUMMARY
+    .filter(function(item) { return item.plan > 0; })
+    .slice()
+    .sort(function(a, b) { return a.gapToDate - b.gapToDate; });
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="chart-empty">Ningún proveedor del ' +
+      'filtro tiene plan asignado este mes.</div>';
+    return;
+  }
+
+  var pct = GAP_MODE === 'pct';
+  var rowH = 22;
+  var padT = 10;
+  var padB = 46;
+  var labelW = 152;
+  var padR = 58;
+  var width = px(host);
+  var height = padT + rows.length * rowH + padB;
+  var innerW = Math.max(120, width - labelW - padR);
+
+  var valueOf = function(item) {
+    if (!pct) { return item.gapToDate; }
+    return item.planToDate > 0
+      ? (item.gapToDate / item.planToDate) * 100
+      : 0;
+  };
+
+  var extent = Math.max.apply(null, rows.map(function(item) {
+    return Math.abs(valueOf(item));
+  }).concat([1]));
+
+  var scale = niceMax(extent * 1.08);
+  var zero = labelW + innerW / 2;
+  var toW = function(value) {
+    return Math.abs(value) / scale * (innerW / 2);
+  };
+
+  var parts = [];
+
+  parts.push(tag('line', {
+    x1: zero, x2: zero, y1: padT - 4, y2: height - padB + 4,
+    stroke: PALETTE.ink2, 'stroke-width': 1.2
+  }));
+
+  [-1, -0.5, 0.5, 1].forEach(function(factor) {
+    var x = zero + factor * (innerW / 2);
+
+    parts.push(tag('line', {
+      x1: x, x2: x, y1: padT - 4, y2: height - padB + 4,
+      class: 'chart-grid', 'stroke-dasharray': '2 3'
+    }));
+
+    parts.push(tag('text', {
+      x: x, y: height - padB + 20,
+      'text-anchor': 'middle', class: 'chart-axis'
+    }, pct
+      ? signed(scale * factor, 0) + '%'
+      : signed(scale * factor)
+    ));
+  });
+
+  rows.forEach(function(item, index) {
+    var y = padT + index * rowH;
+    var value = valueOf(item);
+    var w = Math.max(1.5, toW(value));
+    var negative = value < 0;
+    var color = BAND_COLOR[item.band] || PALETTE.line2;
+
+    parts.push(tag('text', {
+      x: labelW - 10, y: y + rowH / 2 + 3.5,
+      'text-anchor': 'end',
+      class: 'chart-label',
+      style: 'font-size:10.5px;font-weight:500'
+    }, esc(clip(item.provider, 24))));
+
+    parts.push(tag('rect', {
+      x: negative ? zero - w : zero,
+      y: y + 3.5, width: w, height: rowH - 8,
+      rx: 2, fill: color,
+      class: 'bar-x',
+      style: 'transform-origin:' + (negative ? 'right' : 'left') +
+        ';animation-delay:' + (index * 16) + 'ms',
+      'data-tip': gapTip(item)
+    }));
+
+    parts.push(tag('text', {
+      x: negative ? zero - w - 6 : zero + w + 6,
+      y: y + rowH / 2 + 3.5,
+      'text-anchor': negative ? 'end' : 'start',
+      style: 'font-size:10.5px;font-weight:600;font-family:var(--mono);fill:' +
+        (negative ? PALETTE.crit : PALETTE.brand)
+    }, pct ? signed(value, 0) + '%' : signed(value)));
+  });
+
+  parts.push(tag('text', {
+    x: labelW, y: height - padB + 36,
+    class: 'chart-label', 'text-anchor': 'start',
+    style: 'font-size:10px', fill: PALETTE.crit
+  }, '\u2190  hay que recuperar'));
+
+  parts.push(tag('text', {
+    x: width - padR, y: height - padB + 36,
+    class: 'chart-label', 'text-anchor': 'end',
+    style: 'font-size:10px', fill: PALETTE.brand
+  }, 'va sobre plan \u2192'));
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Desvío de cada proveedor respecto del plan a la fecha.'
+  }, parts.join(''));
+
+  bindTips(host);
+}
+
+function gapTip(item) {
+  return tipRow(item.provider, [
+    ['Plan a la fecha', fmt(item.planToDate) + ' MR'],
+    ['Recibido', fmt(item.total) + ' MR'],
+    ['Desvío', signed(item.gapToDate) + ' MR'],
+    ['Cumplimiento', item.complianceToDate === null
+      ? 'sin plan' : pctText(item.complianceToDate)],
+    ['MR en riesgo', fmt(item.risk) + ' MR']
+  ]);
+}
+
+/* ---------------------------------------------------------------------
+ * CONCENTRACIÓN DE LA BRECHA (PARETO)
+ * ------------------------------------------------------------------- */
+
+function drawPareto() {
+  var host = id('chartPareto');
+
+  var rows = SUMMARY
+    .filter(function(item) { return item.gapToDate < 0; })
+    .slice()
+    .sort(function(a, b) { return a.gapToDate - b.gapToDate; })
+    .slice(0, 12);
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="chart-empty">Ningún proveedor está por ' +
+      'debajo de su plan a la fecha. No hay brecha que concentrar.</div>';
+    return;
+  }
+
+  var totalGap = rows.reduce(function(total, item) {
+    return total + Math.abs(item.gapToDate);
+  }, 0);
+
+  var width = px(host);
+  var height = 250;
+  var padL = 46;
+  var padR = 34;
+  var padT = 30;
+  var padB = 78;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
+  var slot = innerW / rows.length;
+  var barW = Math.max(6, Math.min(34, slot * 0.58));
+
+  var maxGap = niceMax(Math.abs(rows[0].gapToDate) * 1.1);
+  var toX = function(index) { return padL + slot * (index + 0.5); };
+  var toY = function(value) { return padT + innerH - (value / maxGap) * innerH; };
+  var toYp = function(value) { return padT + innerH - (value / 100) * innerH; };
+
+  var parts = [];
+
+  ticks(maxGap, 4).forEach(function(value) {
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, fmt(value)));
+  });
+
+  var running = 0;
+  var curve = [];
+  var crossed = -1;
+
+  rows.forEach(function(item, index) {
+    var value = Math.abs(item.gapToDate);
+    running += value;
+
+    var share = totalGap > 0 ? (running / totalGap) * 100 : 0;
+
+    if (crossed === -1 && share >= 80) { crossed = index; }
+
+    curve.push([toX(index), toYp(share)]);
+
+    parts.push(tag('rect', {
+      x: toX(index) - barW / 2, y: toY(value),
+      width: barW, height: Math.max(1, padT + innerH - toY(value)),
+      rx: 2,
+      fill: BAND_COLOR[item.band] || PALETTE.hiviz,
+      class: 'bar-grow',
+      style: 'animation-delay:' + (index * 26) + 'ms',
+      'data-tip': tipRow(item.provider, [
+        ['Falta', fmt(value) + ' MR'],
+        ['Del total faltante', pctText(value / (totalGap || 1))],
+        ['Acumulado', Math.round(share) + '%']
+      ])
+    }));
+
+    parts.push(tag('text', {
+      x: toX(index), y: height - padB + 12,
+      'text-anchor': 'end', class: 'chart-axis',
+      transform: 'rotate(-40 ' + toX(index) + ' ' + (height - padB + 12) + ')'
+    }, esc(clip(item.provider, 16))));
+  });
+
+  parts.push(line(curve, PALETTE.ink, 1.8, null, true));
+
+  curve.forEach(function(point, index) {
+    parts.push(tag('circle', {
+      cx: point[0], cy: point[1], r: 2.6,
+      fill: '#fff', stroke: PALETTE.ink, 'stroke-width': 1.4,
+      class: 'ghost'
+    }));
+  });
+
+  // Umbral del 80%: dónde se corta la lista de llamados.
+  parts.push(tag('line', {
+    x1: padL, x2: width - padR, y1: toYp(80), y2: toYp(80),
+    stroke: PALETTE.hiviz, 'stroke-width': 1.3, 'stroke-dasharray': '5 4'
+  }));
+
+  parts.push(tag('text', {
+    x: width - padR, y: toYp(80) - 5,
+    'text-anchor': 'end', class: 'chart-label',
+    fill: PALETTE.hivizInk, style: 'font-size:10px'
+  }, '80% de la brecha'));
+
+  if (crossed >= 0) {
+    parts.push(tag('text', {
+      x: padL, y: 16, class: 'chart-label',
+      style: 'font-size:11.5px;font-weight:700'
+    }, (crossed + 1) + (crossed === 0 ? ' proveedor explica' : ' proveedores explican') +
+       ' el 80% de la brecha'));
+  }
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Concentración de la brecha por proveedor.'
+  }, parts.join(''));
+
+  bindTips(host);
+}
+
+/* ---------------------------------------------------------------------
+ * SPARKLINE
+ * ------------------------------------------------------------------- */
+
+function sparkline(values, color, fill) {
+  if (!values || values.length < 2) { return ''; }
+
+  var width = 110;
+  var height = 22;
+  var max = Math.max.apply(null, values.concat([1]));
+  var min = Math.min.apply(null, values.concat([0]));
+  var span = (max - min) || 1;
+
+  var points = values.map(function(value, index) {
+    return [
+      (index / (values.length - 1)) * width,
+      height - ((value - min) / span) * (height - 3) - 1.5
+    ];
+  });
+
+  var parts = [];
+
+  if (fill) {
+    parts.push(area(points, height, fill));
+  }
+
+  parts.push(line(points, color, 1.6));
+
+  return tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    preserveAspectRatio: 'none',
+    width: '100%', height: height, 'aria-hidden': 'true'
+  }, parts.join(''));
+}
+
+/* ---------------------------------------------------------------------
+ * TOOLTIP
+ * ------------------------------------------------------------------- */
+
+function tipRow(title, rows) {
+  var body = (rows || [])
+    .filter(Boolean)
+    .map(function(row) {
+      return '<div class="tooltip-row"><span>' + esc(row[0]) +
+        '</span><b>' + esc(row[1]) + '</b></div>';
+    })
+    .join('');
+
+  return '<div class="tooltip-title">' + esc(title) + '</div>' + body;
+}
+
+function bindTips(host) {
+  var tip = id('tooltip');
+
+  host.addEventListener('mousemove', function(event) {
+    var target = event.target.closest('[data-tip]');
+
+    if (!target) {
+      tip.classList.remove('is-on');
+      return;
+    }
+
+    tip.innerHTML = target.getAttribute('data-tip');
+    tip.classList.add('is-on');
+
+    var box = tip.getBoundingClientRect();
+    var x = event.clientX + 14;
+    var y = event.clientY - box.height - 12;
+
+    if (x + box.width > window.innerWidth - 8) {
+      x = event.clientX - box.width - 14;
+    }
+
+    if (y < 8) { y = event.clientY + 18; }
+
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+  });
+
+  host.addEventListener('mouseleave', function() {
+    tip.classList.remove('is-on');
+  });
+}
+
+function redrawCharts() {
+  if (!DATA) { return; }
+
+  if (VIEW === 'panorama') {
+    drawRuma();
+    drawCurve();
+    drawDaily();
+  } else if (VIEW === 'proveedores') {
+    drawGap();
+    drawPareto();
+  }
+}
+</script>

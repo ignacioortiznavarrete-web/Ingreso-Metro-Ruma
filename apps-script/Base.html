@@ -1,0 +1,690 @@
+<script>
+/* =====================================================================
+ * MetroRuma · estado, arranque y utilidades
+ *
+ * Variables compartidas, navegación entre vistas, carga de datos y las
+ * funciones de formato que usan todos los módulos.
+ * ===================================================================== */
+
+var DATA = null;
+var VIEW = 'panorama';
+var ROWS = [];
+var SUMMARY = [];
+var WEEKS = [];
+var DRAFTS = {};
+var SORT = { key: 'risk', dir: 'desc' };
+var DETAIL_SORT = { key: 'fecha', dir: 'desc' };
+var DETAIL_ALL = false;
+var WEEK_SHOWN = '';
+var NOTE_FILTER = 'accion';
+var LAST_FOCUS = null;
+var CURVE_MODE = 'mr';
+var GAP_MODE = 'abs';
+var PICKED = null;
+var BUSY = false;
+
+var PALETTE = {
+  brand: '#24395e',
+  brand2: '#3a5c8c',
+  brand3: '#7d9bc2',
+  hiviz: '#e2600f',
+  hivizInk: '#9c400a',
+  crit: '#a81f14',
+  ink: '#191e26',
+  ink2: '#47515f',
+  ink3: '#606a78',
+  line: '#dbe1e9',
+  line2: '#c2cbd6',
+  sunk: '#e9edf2',
+  wash: '#eaeff6'
+};
+
+/* Umbrales de clasificación sobre el cumplimiento a la fecha. */
+var BANDS = {
+  over: 1.15,
+  ok: 0.95,
+  warn: 0.80
+};
+
+/* =====================================================================
+ * ARRANQUE
+ * ===================================================================== */
+
+document.addEventListener('DOMContentLoaded', function() {
+  var prefs = loadPrefs();
+
+  bindEvents();
+
+  if (window.matchMedia('(max-width: 860px)').matches) {
+    id('filterBox').open = false;
+  }
+
+  if (prefs.view && prefs.view !== 'panorama') {
+    switchView(prefs.view);
+  }
+
+  loadData(prefs.month || null);
+});
+
+/* =====================================================================
+ * PREFERENCIAS
+ * El almacenamiento del navegador puede estar bloqueado dentro del
+ * recuadro de Apps Script, así que todo va envuelto y nunca es crítico.
+ * ===================================================================== */
+
+var PREFS_KEY = 'metroruma.panel.v1';
+
+function loadPrefs() {
+  try {
+    return JSON.parse(window.localStorage.getItem(PREFS_KEY) || '{}') || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function savePrefs() {
+  try {
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({
+      view: VIEW,
+      month: DATA ? DATA.month.prefix : '',
+      provider: id('fProvider').value,
+      source: id('fSource').value,
+      noteFilter: id('fNoteFilter').value
+    }));
+  } catch (error) {
+    // Sin memoria entre sesiones: el tablero funciona igual.
+  }
+}
+
+function applyPrefs() {
+  var prefs = loadPrefs();
+
+  if (prefs.provider && hasOption('fProvider', prefs.provider)) {
+    id('fProvider').value = prefs.provider;
+  }
+
+  if (prefs.source) { id('fSource').value = prefs.source; }
+
+  if (prefs.noteFilter) {
+    id('fNoteFilter').value = prefs.noteFilter;
+    NOTE_FILTER = prefs.noteFilter;
+  }
+}
+
+function hasOption(name, value) {
+  return Array.prototype.some.call(id(name).options, function(option) {
+    return option.value === value;
+  });
+}
+
+function bindEvents() {
+  each('.rail-tab', function(tab) {
+    tab.addEventListener('click', function() {
+      switchView(tab.dataset.view);
+    });
+
+    tab.addEventListener('keydown', function(event) {
+      var tabs = Array.prototype.slice.call(all('.rail-tab'));
+      var index = tabs.indexOf(tab);
+      var next = null;
+
+      if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+        next = tabs[(index + 1) % tabs.length];
+      } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+        next = tabs[(index - 1 + tabs.length) % tabs.length];
+      }
+
+      if (next) {
+        event.preventDefault();
+        next.focus();
+        switchView(next.dataset.view);
+      }
+    });
+  });
+
+  id('btnReload').addEventListener('click', function() {
+    if (confirmDiscard('recargar los datos')) { loadData(); }
+  });
+  id('btnSheet').addEventListener('click', openSheet);
+  id('btnClear').addEventListener('click', clearFilters);
+  id('btnCopy').addEventListener('click', copySummary);
+  id('btnExport').addEventListener('click', copyProviderTable);
+
+  id('fMonth').addEventListener('change', function() {
+    if (confirmDiscard('cambiar de mes')) {
+      loadData(id('fMonth').value);
+    } else {
+      id('fMonth').value = DATA.month.prefix;
+    }
+  });
+
+  ['fFrom', 'fTo', 'fProvider', 'fSource'].forEach(function(key) {
+    id(key).addEventListener('change', function() {
+      savePrefs();
+      renderAll();
+    });
+  });
+
+  id('fSearch').addEventListener('input', debounce(renderAll, 180));
+  id('fWeek').addEventListener('change', function() {
+    if (confirmDiscard('cambiar de semana')) {
+      WEEK_SHOWN = id('fWeek').value;
+      renderWeekView();
+    } else {
+      id('fWeek').value = WEEK_SHOWN;
+    }
+  });
+
+  id('fNoteFilter').addEventListener('change', function() {
+    if (confirmDiscard('cambiar el filtro')) {
+      renderNotes();
+    } else {
+      id('fNoteFilter').value = NOTE_FILTER;
+    }
+  });
+
+  id('btnDraft').addEventListener('click', function() {
+    if (confirmDiscard('recalcular los borradores')) { generateDrafts(); }
+  });
+
+  id('btnSaveAll').addEventListener('click', saveWeek);
+  id('btnWeekReport').addEventListener('click', copyWeekReport);
+  id('btnWeekPrint').addEventListener('click', printWeek);
+  id('btnRetry').addEventListener('click', function() { loadData(); });
+
+  id('btnCurveMode').addEventListener('click', function() {
+    CURVE_MODE = CURVE_MODE === 'mr' ? 'pct' : 'mr';
+    id('btnCurveMode').textContent =
+      CURVE_MODE === 'mr' ? 'Ver en %' : 'Ver en MR';
+    drawCurve();
+  });
+
+  id('btnGapMode').addEventListener('click', function() {
+    GAP_MODE = GAP_MODE === 'abs' ? 'pct' : 'abs';
+    id('btnGapMode').textContent =
+      GAP_MODE === 'abs' ? 'Ver en %' : 'Ver en MR';
+    drawGap();
+  });
+
+  id('btnDetailAll').addEventListener('click', function() {
+    DETAIL_ALL = !DETAIL_ALL;
+    renderDetail();
+  });
+
+  id('btnDetailCopy').addEventListener('click', copyDetailTable);
+
+  each('#detailTable th.sortable', function(th) {
+    th.addEventListener('click', function() {
+      var key = th.dataset.sort;
+
+      if (DETAIL_SORT.key === key) {
+        DETAIL_SORT.dir = DETAIL_SORT.dir === 'desc' ? 'asc' : 'desc';
+      } else {
+        DETAIL_SORT.key = key;
+        DETAIL_SORT.dir = key === 'provider' || key === 'source'
+          ? 'asc' : 'desc';
+      }
+
+      renderDetail();
+    });
+  });
+
+  each('#providerTable th.sortable', function(th) {
+    th.addEventListener('click', function() {
+      var key = th.dataset.sort;
+
+      if (SORT.key === key) {
+        SORT.dir = SORT.dir === 'desc' ? 'asc' : 'desc';
+      } else {
+        SORT.key = key;
+        SORT.dir = key === 'provider' ? 'asc' : 'desc';
+      }
+
+      renderProviderTable();
+    });
+  });
+
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') { closeDrawer(); return; }
+
+    // Los atajos no deben dispararse mientras se escribe un apunte.
+    var tag = (event.target.tagName || '').toLowerCase();
+
+    if (
+      event.ctrlKey || event.metaKey || event.altKey ||
+      tag === 'input' || tag === 'textarea' || tag === 'select'
+    ) {
+      return;
+    }
+
+    var views = { 1: 'panorama', 2: 'proveedores', 3: 'semana', 4: 'detalle' };
+
+    if (views[event.key]) {
+      event.preventDefault();
+      switchView(views[event.key]);
+      return;
+    }
+
+    if (event.key === '/') {
+      event.preventDefault();
+      id('filterBox').open = true;
+      id('fSearch').focus();
+    }
+  });
+
+  window.addEventListener('resize', debounce(function() {
+    if (DATA) { redrawCharts(); }
+  }, 200));
+}
+
+function switchView(view) {
+  if (!view || view === VIEW) { return; }
+
+  if (VIEW === 'semana' && !confirmDiscard('salir de la bitácora')) {
+    return;
+  }
+
+  VIEW = view;
+  savePrefs();
+
+  each('.rail-tab', function(tab) {
+    tab.setAttribute(
+      'aria-selected', tab.dataset.view === view ? 'true' : 'false'
+    );
+  });
+
+  var names = {
+    panorama: 'Panorama del mes',
+    proveedores: 'Cruce por proveedor',
+    semana: 'Apuntes de la semana',
+    detalle: 'Auditoría del dato'
+  };
+
+  id('viewName').textContent = names[view] || '';
+
+  each('.tabpanel', function(panel) {
+    var on = panel.id === 'view-' + view;
+    panel.hidden = !on;
+
+    if (on) {
+      panel.classList.remove('is-entering');
+      void panel.offsetWidth;
+      panel.classList.add('is-entering');
+    }
+  });
+
+  redrawCharts();
+}
+
+/**
+ * La bitácora se edita en el sitio: nada se guarda solo. Antes de
+ * descartar una tarjeta tocada hay que preguntar.
+ */
+function confirmDiscard(action) {
+  var dirty = all('#notesList .note[data-dirty="1"]').length;
+
+  if (!dirty) { return true; }
+
+  return window.confirm(
+    'Hay ' + dirty + (dirty === 1 ? ' apunte editado' : ' apuntes editados') +
+    ' sin guardar.\n\nSi continúas se pierden los cambios. ' +
+    '¿Quieres ' + action + ' de todos modos?'
+  );
+}
+
+/* =====================================================================
+ * CARGA
+ * ===================================================================== */
+
+function loadData(monthPrefix) {
+  setBusy(true);
+  hide('bannerError');
+  step('leyendo la planilla…');
+
+  var handler = {
+    ok: function(result) {
+      DATA = result;
+      DRAFTS = {};
+      step('cruzando proveedores…');
+      configure();
+      applyPrefs();
+      renderAll();
+      savePrefs();
+      setBusy(false);
+    },
+    fail: function(error) {
+      setBusy(false);
+      showError(
+        (error && error.message) ? error.message : String(error)
+      );
+    }
+  };
+
+  if (typeof google === 'undefined' || !google.script) {
+    handler.fail(new Error(
+      'Esta página necesita ejecutarse dentro de Google Apps Script.'
+    ));
+    return;
+  }
+
+  google.script.run
+    .withSuccessHandler(handler.ok)
+    .withFailureHandler(handler.fail)
+    .getDashboardData(monthPrefix || null);
+}
+
+function configure() {
+  var month = DATA.month || {};
+  var source = DATA.source || {};
+  var wd = workdays();
+
+  fillSelect('fMonth', (DATA.availableMonths || []).map(function(item) {
+    return { value: item.prefix, label: cap(item.label) };
+  }), null);
+
+  id('fMonth').value = month.prefix || '';
+
+  id('stampCut').textContent = wd.referenceDateLabel || '—';
+  id('stampDays').textContent = wd.elapsed + '/' + wd.total;
+  id('stampActual').textContent = source.lastActualDateLabel || '—';
+  id('stampReport').textContent = source.latestReportDateLabel || '—';
+
+  id('fFrom').value = month.startKey || '';
+  id('fTo').value = month.endKey || '';
+
+  fillSelect(
+    'fProvider',
+    (DATA.filters.providers || []).map(function(value) {
+      return { value: value, label: value };
+    }),
+    'Todos'
+  );
+
+  renderBanners();
+}
+
+function renderBanners() {
+  var source = DATA.source || {};
+  var wd = workdays();
+  var parts = [];
+
+  if (source.supplementRows) {
+    parts.push(
+      'Datos reales hasta el ' + source.lastActualDateLabel +
+      '. Del ' + source.supplementStartLabel + ' al ' +
+      source.latestReportDateLabel + ' se completa con CUMPLIMIENTO × ' +
+      DATA.factor + ' por proveedor.'
+    );
+  } else {
+    parts.push(
+      'No hay días posteriores al cierre de Ingresos: el tablero usa ' +
+      'solo datos reales.'
+    );
+  }
+
+  parts.push(
+    'El plan se reparte en ' + wd.total + ' días hábiles; van ' +
+    wd.elapsed + ' y quedan ' + wd.remaining + '.'
+  );
+
+  if (wd.holidays && wd.holidays.length) {
+    parts.push(
+      'Se descontaron ' + wd.holidays.length + ' feriado' +
+      (wd.holidays.length === 1 ? '' : 's') + ': ' +
+      wd.holidays.map(dmy).join(', ') + '.'
+    );
+  }
+
+  id('bannerInfoText').textContent = parts.join(' ');
+
+  var warnings = [];
+
+  if (DATA.gmailAudit && DATA.gmailAudit.schemaOld) {
+    warnings.push(
+      'La hoja Informegmail todavía tiene el esquema antiguo de totales. ' +
+      'Ejecuta "Reconstruir mes actual desde Gmail" para importar el ' +
+      'detalle por proveedor.'
+    );
+  }
+
+  var unmatched = (DATA.source.unmatchedProviders || []).length;
+
+  if (unmatched) {
+    warnings.push(
+      unmatched + ' proveedor' + (unmatched === 1 ? '' : 'es') +
+      ' sin fila equivalente en Plan. Revisa la pestaña Detalle.'
+    );
+  }
+
+  if (warnings.length) {
+    id('bannerWarnText').textContent = warnings.join(' ');
+    show('bannerWarn');
+  } else {
+    hide('bannerWarn');
+  }
+}
+
+/* =====================================================================
+ * ESTADO Y UTILIDADES
+ * ===================================================================== */
+
+function setBusy(on, quiet) {
+  BUSY = on;
+
+  id('btnReload').classList.toggle('is-busy', on);
+
+  ['btnSaveAll', 'btnDraft', 'btnWeekReport', 'btnWeekPrint']
+    .forEach(function(name) { id(name).disabled = on; });
+
+  if (!quiet) { id('veil').hidden = !on; }
+}
+
+function step(text) {
+  var node = id('veilStep');
+  if (node) { node.textContent = text; }
+}
+
+function showError(message) {
+  var text = String(message);
+
+  id('bannerErrorText').textContent = text;
+  id('bannerErrorHint').textContent = errorHint(text);
+  show('bannerError');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+/**
+ * Traduce el error del servidor a lo que hay que revisar en la planilla.
+ */
+function errorHint(text) {
+  var key = String(text).toLowerCase();
+
+  if (key.indexOf('columna para') !== -1) {
+    return 'La hoja Plan no tiene una columna con ese mes. Revisa que el ' +
+      'encabezado diga el mes y el año, por ejemplo "ago-2026" o "2026-08".';
+  }
+
+  if (key.indexOf('proveedores') !== -1) {
+    return 'No se encontró el encabezado "Proveedores" en la hoja Plan ' +
+      'dentro de las primeras 20 filas.';
+  }
+
+  if (key.indexOf('fecha contab') !== -1) {
+    return 'La columna E de la hoja Ingresos debe llamarse "Fecha Contab.".';
+  }
+
+  if (key.indexOf('no existe la hoja') !== -1) {
+    return 'Falta una hoja o cambió de nombre. El tablero espera ' +
+      'Ingresos, Plan e Informegmail.';
+  }
+
+  if (key.indexOf('permiso') !== -1 || key.indexOf('authoriz') !== -1) {
+    return 'Vuelve a abrir el tablero desde el menú de la planilla para ' +
+      'autorizar el acceso.';
+  }
+
+  return 'Si acabas de editar la planilla, revisa que las hojas Ingresos, ' +
+    'Plan e Informegmail conserven sus encabezados.';
+}
+
+function id(name) { return document.getElementById(name); }
+function all(selector, root) { return (root || document).querySelectorAll(selector); }
+
+function each(selector, fn, root) {
+  Array.prototype.forEach.call(all(selector, root), fn);
+}
+
+function show(name) { id(name).hidden = false; }
+function hide(name) { id(name).hidden = true; }
+
+function fillSelect(name, options, firstLabel) {
+  var select = id(name);
+  var html = firstLabel
+    ? '<option value="">' + esc(firstLabel) + '</option>'
+    : '';
+
+  html += options.map(function(option) {
+    return '<option value="' + esc(option.value) + '">' +
+      esc(option.label) + '</option>';
+  }).join('');
+
+  select.innerHTML = html;
+}
+
+function dateInput(name) {
+  var value = String(id(name).value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
+}
+
+function esc(value) {
+  return String(value === null || value === undefined ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fmt(value) {
+  var number = Number(value) || 0;
+
+  return new Intl.NumberFormat('es-CL', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.abs(number) >= 100 ? 0 : 1
+  }).format(number);
+}
+
+function fmtInt(value) {
+  return new Intl.NumberFormat('es-CL', {
+    maximumFractionDigits: 0
+  }).format(Number(value) || 0);
+}
+
+function dec(value) {
+  return String(round(Number(value) || 0, 2)).replace('.', ',');
+}
+
+function signed(value, digits) {
+  var number = Number(value) || 0;
+  var text = digits === 0
+    ? String(Math.round(number))
+    : fmt(number);
+
+  return (number > 0 ? '+' : '') + text;
+}
+
+function pctText(value) {
+  return new Intl.NumberFormat('es-CL', {
+    style: 'percent',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1
+  }).format(Number(value) || 0);
+}
+
+function dmy(key) {
+  var match = String(key || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? match[3] + '/' + match[2] + '/' + match[1] : '';
+}
+
+function isoWeek(dateKey) {
+  var parts = String(dateKey).split('-');
+  var date = new Date(Date.UTC(
+    Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])
+  ));
+
+  var day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+
+  var start = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  var week = Math.ceil(((date - start) / 86400000 + 1) / 7);
+
+  return date.getUTCFullYear() + '-W' + String(week).padStart(2, '0');
+}
+
+function weekLabel(start, end) {
+  var a = String(start).split('-');
+  var b = String(end).split('-');
+
+  return a[2] + '/' + a[1] + ' – ' + b[2] + '/' + b[1];
+}
+
+function norm(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function uniq(values) {
+  return Array.prototype.filter.call(values, uniqFilter());
+}
+
+function uniqFilter() {
+  var seen = {};
+
+  return function(value) {
+    if (seen[value]) { return false; }
+    seen[value] = true;
+    return true;
+  };
+}
+
+function sum(list, key) {
+  return list.reduce(function(total, item) {
+    return total + (Number(item[key]) || 0);
+  }, 0);
+}
+
+function round(value, digits) {
+  var factor = Math.pow(10, digits === undefined ? 1 : digits);
+  return Math.round((Number(value) || 0) * factor) / factor;
+}
+
+function clip(value, max) {
+  var text = String(value || '');
+  return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
+function cap(value) {
+  var text = String(value || '');
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+}
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function debounce(fn, wait) {
+  var timer = null;
+
+  return function() {
+    var context = this;
+    var args = arguments;
+
+    clearTimeout(timer);
+    timer = setTimeout(function() { fn.apply(context, args); }, wait);
+  };
+}
+</script>
