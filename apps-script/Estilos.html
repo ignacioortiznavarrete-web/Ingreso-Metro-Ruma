@@ -80,15 +80,16 @@
   --sans: 'Archivo', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  /* Ritmo */
+  /* Ritmo: dentro de una banda y entre bandas no se separan igual, o la
+     página queda sin respiración y todo pesa lo mismo. */
   --gap: 14px;
+  --gap-band: 24px;
   --radius: 10px;
   --radius-sm: 6px;
   --rail: 96px;
 
   /* Elevación: sombras teñidas al fondo, nunca junto a borde grueso */
   --lift-1: 0 1px 2px rgba(24, 39, 66, .05);
-  --lift-2: 0 6px 16px -8px rgba(24, 39, 66, .18);
 
   /* Curvas: solo salidas exponenciales, sin rebote */
   --out-quint: cubic-bezier(.22, 1, .36, 1);
@@ -520,6 +521,7 @@ h1, h2, h3, p { margin: 0; }
   font-weight: 700;
   font-stretch: 104%;
   letter-spacing: -.005em;
+  text-wrap: balance;
   color: var(--ink);
 }
 
@@ -537,7 +539,11 @@ h1, h2, h3, p { margin: 0; }
 .panel-body { padding: 0 16px 15px; }
 .panel-body-flush { padding: 0; }
 
-.grid { display: grid; gap: var(--gap); margin-bottom: var(--gap); }
+.grid { display: grid; gap: var(--gap); margin-bottom: var(--gap-band); }
+
+/* Última banda de la vista: el aire de abajo lo pone .main */
+.tabpanel > .grid:last-child,
+.tabpanel > .panel:last-child { margin-bottom: 0; }
 .grid-hero {
   grid-template-columns: minmax(0, 1.72fr) minmax(300px, 1fr);
   align-items: start;
@@ -641,7 +647,10 @@ h1, h2, h3, p { margin: 0; }
 .readout-value {
   margin-top: 3px;
   font-family: var(--mono);
-  font-size: 19px;
+  /* La cifra más grande de la página después de la ruma: es la que
+     contesta dónde está el mes. El diagnóstico de abajo va un paso más
+     abajo en la escala, no uno más arriba. */
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.15;
   letter-spacing: -.03em;
@@ -676,7 +685,7 @@ h1, h2, h3, p { margin: 0; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: 1px;
-  margin-bottom: var(--gap);
+  margin-bottom: var(--gap-band);
   /* El fondo es blanco y el filete lo pone cada celda con su propio anillo
      de 1px: así, cuando la última fila queda incompleta, el hueco sigue
      siendo papel y no un bloque gris. El número de columnas lo decide
@@ -715,7 +724,7 @@ h1, h2, h3, p { margin: 0; }
 
 .gauge-value {
   font-family: var(--mono);
-  font-size: 21px;
+  font-size: 17px;
   font-weight: 600;
   line-height: 1.1;
   letter-spacing: -.035em;
@@ -723,7 +732,6 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .gauge-note { font-size: 10px; line-height: 1.4; color: var(--ink-3); }
-.gauge-spark { height: 22px; margin-top: 3px; }
 .gauge-value.is-over { color: var(--brand); }
 .gauge-value.is-warn { color: var(--hiviz-ink); }
 .gauge-value.is-crit { color: var(--sev-crit); }
@@ -1484,7 +1492,9 @@ h1, h2, h3, p { margin: 0; }
   color: var(--ink-3);
 }
 
-.cal-dow.is-off { color: var(--line-2); }
+/* El sábado y el domingo se distinguen por peso, no por desaparecer:
+   la letra sigue siendo un dato y --line-2 daba 1,7:1. */
+.cal-dow.is-off { font-weight: 400; color: var(--ink-3); }
 
 .cal-cell {
   position: relative;
@@ -1650,16 +1660,40 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* =====================================================================
- * ENTRADA ESCALONADA
- * Los estratos suben como se apila una ruma. El estado final es el
- * estado por defecto: si la animación no corre, todo queda visible.
+ * ENTRADA
+ *
+ * Cada cosa entra como lo que es, no todas igual. Los estratos de la
+ * ruma suben como se apila una ruma de verdad; las barras crecen desde
+ * su base; las líneas se dibujan; las casillas del calendario se llenan
+ * de izquierda a derecha.
+ *
+ * El panel que contiene esos dibujos solo aparece: montarle encima el
+ * mismo desplazamiento de 9 px a todos los paneles de todas las vistas
+ * era una capa de movimiento de más, la misma para cosas distintas, y
+ * competía con la animación que sí dice algo del dato.
+ *
+ * El desplazamiento se guarda para lo que no tiene movimiento propio
+ * adentro: las filas de la lista de ataque y las tarjetas de apuntes.
+ *
+ * El estado final es el estado por defecto: si la animación no corre,
+ * todo queda visible.
  * ===================================================================== */
 
 .tabpanel[hidden] { display: none; }
 
 .stagger > * {
+  animation: surface-in .38s var(--out-quart) both;
+  animation-delay: calc(var(--i, 0) * 38ms);
+}
+
+@keyframes surface-in { from { opacity: 0; } }
+
+/* Lo que entra desplazándose: una lista de filas, donde el barrido de
+   abajo hacia arriba es el orden en que se lee. */
+.attack-item,
+.note {
   animation: lift .42s var(--out-quint) both;
-  animation-delay: calc(var(--i, 0) * 42ms);
+  animation-delay: calc(var(--i, 0) * 34ms);
 }
 
 @keyframes lift {

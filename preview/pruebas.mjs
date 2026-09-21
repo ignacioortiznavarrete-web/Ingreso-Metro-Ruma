@@ -43,8 +43,31 @@ await p.goto('file:///home/user/Ingreso-Metro-Ruma/preview/out/index.html', { wa
 await p.waitForSelector('.gauge'); await p.waitForTimeout(900);
 
 ok('velo de carga oculto', await p.locator('#veil').isHidden());
-ok('KPIs pintados', await p.locator('#gauges .gauge').count() === 9,
+// La banda de diagnóstico no repite la lectura de la ruma: son cinco
+// medidas distintas de las cuatro de arriba.
+ok('banda de diagnóstico', await p.locator('#gauges .gauge').count() === 5,
    (await p.locator('#gauges .gauge').count()) + ' mediciones');
+
+const dupes = await p.evaluate(() => {
+  const num = (s) => s.replace(/[^\d,.-]/g, '');
+  const readout = [...document.querySelectorAll('.readout-value')]
+    .map((el) => num(el.textContent)).filter(Boolean);
+  return [...document.querySelectorAll('#gauges .gauge-value')]
+    .map((el) => num(el.textContent))
+    .filter((v) => v && readout.includes(v));
+});
+ok('no repite la lectura de la ruma', dupes.length === 0,
+   dupes.join(', ') || 'sin cifras repetidas');
+
+// La lectura de la ruma manda sobre el diagnóstico, no al revés.
+const scale = await p.evaluate(() => ({
+  readout: parseFloat(getComputedStyle(
+    document.querySelector('.readout-value')).fontSize),
+  gauge: parseFloat(getComputedStyle(
+    document.querySelector('#gauges .gauge-value')).fontSize)
+}));
+ok('la jerarquía tipográfica respeta el orden',
+   scale.readout > scale.gauge, `ruma ${scale.readout}px > banda ${scale.gauge}px`);
 ok('lista de ataque', await p.locator('.attack-item').count() > 0);
 
 // --- Proveedores: orden y ficha ---
@@ -94,9 +117,16 @@ ok('filtro "todos" amplía la lista', await p.locator('#notesList .note').count(
 
 // --- Filtro de proveedor recalcula todo ---
 await p.click('#tab-panorama'); await p.waitForTimeout(500);
-const num = (text) => Number(String(text).replace(/\./g, '').replace(',', '.')) || 0;
-const recibido = () => p.locator('#gauges .gauge').first()
-  .locator('.gauge-value').innerText();
+// La lectura de la ruma trae la unidad pegada ("27.907MR"), así que
+// primero se descarta todo lo que no sea cifra.
+const num = (text) => Number(
+  String(text).replace(/[^\d.,-]/g, '').replace(/\./g, '').replace(',', '.')
+) || 0;
+
+// El total recibido vive en la lectura de la ruma, no en la banda de
+// diagnóstico: esa banda ya no repite las cifras de arriba.
+const recibido = () => p.locator('.readout').first()
+  .locator('.readout-value').innerText();
 
 // Contra la cifra que entrega el propio tablero, no contra una constante:
 // así la prueba sigue valiendo cuando cambian los datos simulados.

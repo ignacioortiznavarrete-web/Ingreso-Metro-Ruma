@@ -15,14 +15,26 @@ function px(host) {
   return Math.max(320, host.clientWidth || 640);
 }
 
+/* Escalones del techo del eje. Con solo 1-2-5-10 el salto es demasiado
+   grande: un máximo de 2.754 subía a 5.000 y el eje desperdiciaba casi la
+   mitad de su alto, así que las barras salían chicas y el gráfico parecía
+   vacío. Esta escala acota el sobrante y todos sus valores se dividen
+   razonablemente en cuatro marcas. */
+var AXIS_STEPS = Object.freeze([1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]);
+
 function niceMax(value) {
-  if (!value || !isFinite(value)) { return 10; }
+  if (!value || !isFinite(value) || value <= 0) { return 10; }
 
   var exponent = Math.pow(10, Math.floor(Math.log(value) / Math.LN10));
   var scaled = value / exponent;
-  var step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 5 ? 5 : 10;
 
-  return step * exponent;
+  for (var index = 0; index < AXIS_STEPS.length; index++) {
+    if (scaled <= AXIS_STEPS[index] + 1e-9) {
+      return AXIS_STEPS[index] * exponent;
+    }
+  }
+
+  return 10 * exponent;
 }
 
 function ticks(max, count) {
@@ -1533,6 +1545,9 @@ function drawPortfolio() {
         ['Plan del mes', fmt(item.plan)],
         ['Recibido', fmt(item.total)],
         ['Ritmo actual', fmt(item.pace) + ' MR/día'],
+        item.bestDay
+          ? ['Su mejor día', fmt(item.bestDay) + ' MR']
+          : null,
         item.requiredPace !== null
           ? ['Ritmo exigido', fmt(item.requiredPace) + ' MR/día']
           : null,
@@ -1607,12 +1622,13 @@ function drawPortfolio() {
       fmt(rows.reduce(function(total, item) { return total + item.risk; }, 0)) +
       ' MR en riesgo entre ' + rows.length + ' proveedores. ' +
       (nudge.length
-        ? nudge.length + ' se arreglan con un llamado. '
+        ? nudge.length + ' ya entregaron el ritmo que les falta: basta ' +
+          'llamarlos. '
         : '') +
       (replace.length
-        ? replace.length + ' no llegan ni al cuádruple de su ritmo: ese ' +
-          'volumen hay que buscarlo en otra parte.'
-        : 'Ninguno está fuera de alcance.');
+        ? replace.length + ' necesitan más de una vez y media su mejor día ' +
+          'del mes: ese volumen hay que buscarlo en otra parte.'
+        : 'Ninguno está fuera de su alcance.');
   }
 }
 

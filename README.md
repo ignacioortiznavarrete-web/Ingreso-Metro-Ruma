@@ -22,7 +22,7 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 62 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/pruebas.mjs` | 64 comprobaciones de interacción sobre la copia autónoma. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -48,7 +48,7 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/pruebas.mjs        # 62 comprobaciones de interacción sobre Chromium
+node preview/pruebas.mjs        # 64 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
 
@@ -318,6 +318,70 @@ Charts. Solo quedan las dos familias tipográficas de Google Fonts.
 - Un error del servidor muestra la causa probable y un botón de reintento, en
   vez de un mensaje crudo.
 
+## Pasada de diseño
+
+Revisión con las skills `impeccable` y `frontend-design`. La paleta, la
+tipografía y la ruma no se tocaron: el sistema visual estaba decidido y
+documentado, y la identidad manda sobre el gusto de una pasada. Lo que se
+arregló es lo que no estaba a la altura de ese sistema.
+
+**La pantalla decía dos veces lo mismo.** La lectura de la ruma y la banda
+de mediciones traían las mismas cuatro cifras —27.907, −8.813, 32.558 y
+4.978— separadas por 200 px, y la banda las mostraba en tipografía *más
+grande* que la lectura de la ruma. La jerarquía estaba invertida y la vista
+no tenía dónde caer. Ahora cada superficie tiene un trabajo:
+
+| Superficie | Qué contesta | Escala |
+|---|---|---|
+| Ruma + lectura | Dónde está el mes: recibido, desvío, cierre proyectado, ritmo exigido | 22 px |
+| Banda de diagnóstico | Qué hacer al respecto: MR en riesgo, ritmo diario, bajo plan, sin recibir, concentración | 17 px |
+
+De nueve mediciones quedaron cinco, ninguna repetida. La chispa que traía
+una sola celda también se fue: la nota ya dice la tendencia con palabras
+("parejo en los últimos 5 días") y la serie completa está dibujada en
+*Recepción diaria*.
+
+**El techo del eje desperdiciaba medio gráfico.** `niceMax` solo ofrecía
+1-2-5-10 × 10ⁿ, así que un máximo de 2.754 subía a 5.000: las barras de la
+recepción diaria salían chicas y el gráfico parecía vacío. Peor en la curva
+en modo porcentaje, donde el eje llegaba al **200%** para datos que no
+pasaban del 114%. Con una escala de escalones intermedios el sobrante baja
+del 82% al 9% en los peores casos, y afecta a los ocho gráficos.
+
+**El movimiento era el mismo reflejo en todas partes.** Cada panel de cada
+vista entraba con el mismo desplazamiento de 9 px, encima de la animación
+que sí dice algo del dato (los estratos de la ruma suben, las barras crecen
+desde su base, las líneas se dibujan). El panel ahora solo aparece; el
+desplazamiento se guardó para lo que no tiene movimiento propio adentro: las
+filas de la lista de ataque y las tarjetas de apuntes.
+
+**La columna de acción no informaba.** Las dieciséis filas de la tabla de
+decisión decían lo mismo: *"No llega: hay que reemplazar volumen"*. No era
+un error de cálculo sino del criterio: el múltiplo del ritmo promedio se
+dispara solo cuando se acaban los días hábiles, así que a tres días del
+cierre cualquier brecha clasifica igual a todo el mundo. Ahora se compara
+contra **el mejor día que el proveedor ya entregó ese mes**, que es su
+capacidad demostrada:
+
+| Zona | Criterio |
+|---|---|
+| Cierra su plan | No pierde nada al ritmo actual |
+| Ya entregó ese ritmo | El ritmo que falta ≤ su mejor día · basta llamarlo |
+| Exige más camiones | Hasta 1,5× su mejor día |
+| Fuera de su alcance | Más de 1,5× su mejor día · el volumen se busca en otra parte |
+
+Con eso la columna se reparte y la tabla **se ordena por decisión, no por
+tamaño**: primero los que se recuperan hoy, después los que exigen camiones,
+después el volumen que hay que comprar afuera, al final los que ya cierran.
+Ordenada por riesgo ponía arriba justo a los proveedores con los que no se
+puede hacer nada.
+
+**Otros ajustes.** Ritmo de espaciado (24 px entre bandas, 14 px dentro de
+una banda, antes 14 px para todo); `text-wrap: balance` en los títulos de
+panel; el encabezado del sábado y el domingo en el calendario pasó de 1,7:1
+a 5,71:1 de contraste; fuera el token `--lift-2` y la ranura `.gauge-spark`,
+que no los usaba nadie.
+
 ### Arreglos de esta tanda
 
 - **El color de los rótulos de los gráficos se perdía.** Iba en el atributo
@@ -350,7 +414,7 @@ Charts. Solo quedan las dos familias tipográficas de Google Fonts.
 
 ## Verificación
 
-`preview/` incluye una suite de 62 comprobaciones de interacción sobre
+`preview/` incluye una suite de 64 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
 guardar, informe semanal y memoria entre sesiones.
@@ -361,6 +425,10 @@ el calendario pinte una casilla por día y que la suma de días hábiles del
 calendario cuadre con el total que usa el prorrateo. Sobre la vista forestal,
 que el mix cuadre exactamente con lo que vino de `Ingresos` y que las
 participaciones sumen 100%.
+
+De la pasada de diseño se comprueba que la banda de diagnóstico no repita
+ninguna cifra de la lectura de la ruma y que la jerarquía tipográfica siga en
+el orden correcto (la lectura de la ruma por sobre la banda).
 
 También se comprueba que no haya desbordamiento horizontal en 1600 px, 1280 px
 ni 390 px, recorriendo las cinco vistas en cada ancho.

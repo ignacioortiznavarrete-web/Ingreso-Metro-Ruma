@@ -130,6 +130,11 @@ function buildSummary(rows) {
       .filter(function(key) { return key <= reference; })
       .map(function(key) { return bucket.byDate[key] || 0; });
 
+    // El mejor día que este proveedor ya entregó este mes: es la medida
+    // de lo que puede hacer, y por eso sirve para decidir si el ritmo
+    // que le falta está a su alcance.
+    var bestDay = daily.length ? Math.max.apply(null, daily) : 0;
+
     return {
       provider: provider,
       plan: plan,
@@ -151,6 +156,7 @@ function buildSummary(rows) {
       risk: risk,
       idleDays: idleDays,
       lastDate: bucket.lastDate,
+      bestDay: bestDay,
       variability: variation(daily),
       band: band(complianceToDate, plan)
     };
@@ -647,27 +653,44 @@ function buildPortfolio(summary) {
         pace: item.pace,
         requiredPace: item.requiredPace,
         band: item.band,
-        zone: zoneOf(effort, item.risk)
+        bestDay: item.bestDay,
+        zone: zoneOf(item.requiredPace, item.bestDay, item.risk)
       };
     })
     .sort(function(a, b) { return b.risk - a.risk; });
 }
 
 /**
- * Zona de acción sobre el esfuerzo exigido.
+ * Zona de acción.
+ *
+ * No se decide con el múltiplo del ritmo promedio. Ese múltiplo se
+ * dispara solo a medida que se acaban los días hábiles —a tres días del
+ * cierre cualquier brecha exige varias veces el promedio—, así que a fin
+ * de mes clasificaba a todos los proveedores igual y la columna dejaba de
+ * informar: dieciséis filas rojas idénticas.
+ *
+ * Se compara contra el mejor día que el proveedor ya entregó este mes.
+ * Ese número sí distingue: pedirle un ritmo que ya alcanzó alguna vez es
+ * un llamado; pedirle el doble de su mejor día es otra conversación.
  */
-function zoneOf(effort, risk) {
+function zoneOf(requiredPace, bestDay, risk) {
   if (risk <= 0) { return 'safe'; }
-  if (effort <= 1.15) { return 'nudge'; }
-  if (effort <= 1.6) { return 'push'; }
+  if (requiredPace === null) { return 'safe'; }
+
+  // Sin una sola entrega no hay capacidad demostrada que medir.
+  if (!bestDay) { return 'replace'; }
+
+  if (requiredPace <= bestDay) { return 'nudge'; }
+  if (requiredPace <= bestDay * 1.5) { return 'push'; }
+
   return 'replace';
 }
 
 var ZONE_LABEL = {
   safe: 'Cierra su plan',
-  nudge: 'Con un llamado llega',
-  push: 'Exige empujar el programa',
-  replace: 'No llega: hay que reemplazar volumen'
+  nudge: 'Ya entregó ese ritmo: basta un llamado',
+  push: 'Exige más camiones que su mejor día',
+  replace: 'Fuera de su alcance: buscar el volumen'
 };
 
 var ZONE_COLOR = {
