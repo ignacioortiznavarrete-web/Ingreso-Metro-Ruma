@@ -225,6 +225,26 @@ function build(prefix, referenceDate) {
     });
   }
 
+  // Dos filas repetidas a propósito: el export de SAP pegado dos veces es
+  // el accidente más caro y el panel de doble conteo tiene que mostrarlo.
+  const repetidas = rows
+    .filter((r) => r.source === 'INGRESOS')
+    .slice(0, 2)
+    .map((r) => ({ ...r }));
+
+  rows.push(...repetidas);
+
+  const duplicateRows = repetidas.map((r) => ({
+    fecha: r.fecha,
+    fechaLabel: r.fechaLabel,
+    provider: r.provider,
+    material: r.descripcion,
+    predio: r.predio,
+    cantidad: r.cantidad,
+    veces: 2,
+    exceso: r.cantidad
+  }));
+
   const latestReport = elapsedKeys[elapsedKeys.length - 1];
 
   return {
@@ -261,7 +281,42 @@ function build(prefix, referenceDate) {
       supplementRows: rows.filter((r) => r.source === 'GMAIL').length,
       gmailProviderRows: rows.filter((r) => r.source === 'GMAIL').length,
       planProviders: PROVIDERS.length,
-      unmatchedProviders: ['TRANSPORTES PEÑA']
+      unmatchedProviders: [
+        {
+          provider: 'TRANSPORTES PEÑA',
+          rawNames: ['TRANSPORTES PEÑA Y CIA LTDA'],
+          origin: 'TRANSPORTES PEÑA Y CIA LTDA',
+          rows: rows.filter((r) => r.provider === 'TRANSPORTES PEÑA').length,
+          amount: Math.round(
+            rows.filter((r) => r.provider === 'TRANSPORTES PEÑA')
+              .reduce((sum, r) => sum + r.cantidad, 0) * 10
+          ) / 10,
+          sources: ['INGRESOS'],
+          predios: ['PREDIO EL ROBLE'],
+          roles: ['311-4'],
+          // Sin equivalente real en el Plan: el parecido es bajo a propósito.
+          suggestion: 'PROMASA',
+          suggestionScore: 0.31
+        },
+        {
+          provider: 'INMOB FOR E INV SAVI LTDA',
+          rawNames: ['INMOB FOR E INV SAVI LTDA'],
+          origin: 'INMOB FOR E INV SAVI LTDA',
+          rows: 3,
+          amount: 412.5,
+          sources: ['INGRESOS'],
+          predios: ['FUNDO EL PEUMO'],
+          roles: ['221-7'],
+          // El caso que motiva todo: SAP lo abrevia distinto y no cruza.
+          suggestion: 'SAVI',
+          suggestionScore: 0.87
+        }
+      ],
+      similarProviders: [
+        { a: 'SAVI', b: 'INMOB FOR E INV SAVI LTDA', score: 0.87 }
+      ],
+      duplicateRows: duplicateRows,
+      aliasCount: 2
     },
     filters: {
       providers: [...PROVIDERS.map(([p]) => p), 'TRANSPORTES PEÑA'].sort(),
@@ -273,6 +328,22 @@ function build(prefix, referenceDate) {
     })),
     rows,
     apuntes: [],
+    homologacion: [
+      {
+        origin: 'AGRICOLA Y FORESTAL DIGUA SPA',
+        target: 'DIGUA',
+        source: 'Tablero',
+        notes: '',
+        author: 'comprador@metroruma.cl'
+      },
+      {
+        origin: 'SOC AGRICOLA LLOHUE LIMITADA',
+        target: 'LLOHUE',
+        source: 'Tablero',
+        notes: '',
+        author: 'comprador@metroruma.cl'
+      }
+    ],
     gmailAudit: { reports: 6, providers: 22 }
   };
 }
@@ -301,6 +372,25 @@ window.google = {
               MOCK.apuntes = MOCK_NOTES;
               ok(JSON.parse(JSON.stringify(MOCK)));
             }, 260);
+          },
+          guardarEquivalencias: function(pairs) {
+            setTimeout(function() {
+              // El cruce real lo rehace el backend; acá basta con sacar de
+              // la lista lo que se acaba de homologar.
+              var resolved = {};
+
+              pairs.forEach(function(pair) {
+                if (pair.target) { resolved[pair.origin] = true; }
+              });
+
+              MOCK.source.unmatchedProviders =
+                MOCK.source.unmatchedProviders.filter(function(item) {
+                  return !resolved[item.origin];
+                });
+
+              MOCK.source.aliasCount += pairs.length;
+              ok({ saved: pairs.length, removed: 0 });
+            }, 200);
           },
           guardarApuntes: function(notes) {
             setTimeout(function() {

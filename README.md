@@ -22,7 +22,8 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 64 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/pruebas.mjs` | 76 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/backend.mjs` | 28 comprobaciones del backend: calendario y homologación. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -48,9 +49,14 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/pruebas.mjs        # 64 comprobaciones de interacción sobre Chromium
+node preview/backend.mjs        # 28 comprobaciones del backend, sin navegador
+node preview/pruebas.mjs        # 76 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
+
+`backend.mjs` no necesita Playwright: carga `Codigo.gs` con los pocos servicios
+de Apps Script que hacen falta y comprueba lo que no se ve desde el navegador
+—el calendario de días hábiles y el orden de resolución de proveedores—.
 
 Las pruebas y las capturas necesitan Playwright (`npm i playwright`).
 `node preview/pruebas.mjs` arma su propia copia con fecha fija (25/09/2026),
@@ -98,8 +104,9 @@ proveedor con los números de la semana. Se corrigen y se guardan en la hoja
 `Apuntes`. Desde aquí sale el **informe semanal**: se copia como texto para
 mandarlo por correo o se imprime a PDF con los apuntes abiertos.
 
-**Detalle.** Salud de los datos, proveedores sin fila en Plan y la auditoría
-fila por fila, ordenable por cualquier columna y copiable a una planilla.
+**Detalle.** Salud de los datos, **los proveedores sin homologar con su
+resolvedor**, el aviso de posible doble conteo y la auditoría fila por fila,
+ordenable por cualquier columna y copiable a una planilla.
 
 ### Del análisis a la acción
 
@@ -167,6 +174,66 @@ planilla ya traía y nadie estaba mirando: `Material`, `Descripción`, `Predio`,
 - **Sin desglose.** Qué parte del volumen llega por el informe diario, que no
   trae material ni predio. Es la ceguera del mes, y conviene tenerla a la
   vista: el mix y los frentes solo pueden desglosar lo que viene de `Ingresos`.
+
+## Homologación de proveedores (hoja `Homologacion`)
+
+SAP no escribe los nombres como los escribe el Plan. `INMOB FORESTAL E INVER
+SAVI LTDA` y `SAVI` son el mismo proveedor. El cruce difuso acierta la mayoría
+de las veces, pero cuando falla el nombre de SAP **entra como un proveedor
+nuevo**: el mismo abastecedor aparece dos veces, una con su plan y otra sin él,
+y ninguna de las dos cumple.
+
+Antes eso solo se arreglaba editando `specialProvider_` en el código. Ahora hay
+una tabla que el comprador mantiene desde el tablero.
+
+**Orden de resolución**, de más a menos autoridad:
+
+| | Método | Quién decide |
+|---|---|---|
+| 1 | Equivalencia guardada | el comprador, en la hoja |
+| 2 | Regla explícita | el código (`specialProvider_`) |
+| 3 | Coincidencia aproximada | el cruce difuso, sobre el umbral |
+| 4 | Nombre normalizado | nadie: queda sin homologar |
+
+La hoja manda sobre las reglas del código a propósito: si una regla está
+equivocada, tiene que poder corregirse sin tocar el script.
+
+**Se resuelve sin salir del tablero.** Pestaña *Detalle* → *Proveedores sin
+homologar*. Cada nombre viene con:
+
+- el nombre **tal cual llegó de SAP**, que es lo que hay que reconocer;
+- cuántos MR y cuántas filas arrastra, para saber si urge;
+- el predio y la fuente de donde viene;
+- el **mejor candidato del Plan ya elegido** en el desplegable, con su
+  porcentaje de parecido. Bajo 60% avisa *revisa antes de guardar*, porque una
+  sugerencia mala guardada a ciegas es peor que no tener ninguna.
+
+Un clic en *Guardar equivalencias* escribe la hoja y recarga el cruce. La
+próxima vez que SAP mande ese nombre, cruza solo.
+
+Una fila por equivalencia:
+
+`Nombre en origen · Proveedor del Plan · Fuente · Notas · Autor · Actualizado`
+
+Se crea sola la primera vez que guardas. También está en el menú
+**MetroRuma Dashboard › Equivalencias de proveedor**, por si conviene revisarla
+o cargarla a mano.
+
+## Posible doble conteo
+
+Dos formas de contar el mismo metro ruma dos veces, las dos detectadas y
+**ninguna corregida sola**: el tablero avisa y el comprador decide.
+
+**Filas repetidas en `Ingresos`.** El export de SAP pegado dos veces duplica el
+volumen sin que nada lo delate. Se marcan las filas idénticas en fecha,
+proveedor, material, predio, rol y cantidad, y se cuantifica cuántos MR sumaría
+de más. No se borran: dos guías distintas pueden coincidir legítimamente en
+todos esos campos y solo quien las emitió sabe cuál es cuál.
+
+**Proveedores parecidos entre sí.** Dos filas homologadas que en realidad son
+el mismo abastecedor reparten su plan entre las dos y ninguna cumple. Se avisa
+sobre 80% de parecido —un umbral conservador, porque marcar proveedores
+distintos como duplicados es ruido— y se unen guardando una equivalencia.
 
 ## Bitácora semanal (hoja `Apuntes`)
 
@@ -261,6 +328,16 @@ lunes a viernes.
 - Las filas del complemento Gmail arrastran `programaMr`: el programa que el
   proveedor comprometió en su informe, para poder medirlo contra lo que
   entregó y no solo contra el plan.
+- `resolveProvider_` recibe el mapa de equivalencias y lo consulta antes que
+  todo lo demás. El mapa se lee **una sola vez** por ejecución y se reparte a
+  los cuatro cruces (Plan, Ingresos, importación de Gmail y lectura de
+  `Informegmail`), en vez de leer la hoja cuatro veces.
+- `guardarEquivalencias(pares)` actualiza la fila existente de un nombre en vez
+  de acumular versiones, y un destino vacío borra la equivalencia. Con bloqueo
+  de script, como los apuntes.
+- `buildUnmatchedProviders_` devuelve volumen, filas, fuentes, predios, el
+  nombre de origen y el mejor candidato con su puntaje: lo que el tablero
+  necesita para proponer la equivalencia hecha.
 - Corregido: `parseOptionalNumber_` devolvía `null` para celdas vacías y
   `isFinite(null)` es `true`, así que las filas de Gmail sin CUMPLIMIENTO
   entraban como cero en vez de descartarse.
@@ -440,7 +517,12 @@ que no los usaba nadie.
 
 ## Verificación
 
-`preview/` incluye una suite de 64 comprobaciones de interacción sobre
+`preview/backend.mjs` corre 28 comprobaciones sin navegador: los días hábiles
+de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
+y el solsticio contra fechas oficiales conocidas, el orden de resolución de
+proveedores y la detección de duplicidad.
+
+`preview/pruebas.mjs` corre 76 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
 guardar, informe semanal y memoria entre sesiones.
@@ -461,6 +543,11 @@ sobre una lista de selectores elegidos a mano: se resuelve el `oklch()` a
 sRGB, se compone la transparencia contra el fondo real y se exige 4,5:1 (3:1
 en texto grande). Así apareció la insignia naranja del riel, que llevaba
 tiempo en 3,42:1 y ninguna revisión por muestreo había visto.
+
+Del resolvedor de proveedores se comprueba el camino completo: que liste los
+que no cruzan, que muestre el nombre tal cual llegó de SAP, que traiga el
+candidato preseleccionado, que avise cuando el parecido es bajo, que el
+contador siga lo elegido y que guardar resuelva efectivamente al proveedor.
 
 También se comprueba que no haya desbordamiento horizontal en 1600 px, 1280 px
 ni 390 px, recorriendo las cinco vistas en cada ancho.

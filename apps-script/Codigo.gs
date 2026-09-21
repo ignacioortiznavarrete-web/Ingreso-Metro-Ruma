@@ -28,6 +28,7 @@ const CONFIG = Object.freeze({
   SHEET_PLAN: 'Plan',
   SHEET_GMAIL: 'Informegmail',
   SHEET_APUNTES: 'Apuntes',
+  SHEET_HOMOLOGACION: 'Homologacion',
   HTML_FILE: 'Index',
   TIMEZONE: 'America/Santiago',
 
@@ -288,6 +289,15 @@ const GMAIL_HEADERS = Object.freeze([
   'Score coincidencia'
 ]);
 
+const HOMOLOGACION_HEADERS = Object.freeze([
+  'Nombre en origen',
+  'Proveedor del Plan',
+  'Fuente',
+  'Notas',
+  'Autor',
+  'Actualizado'
+]);
+
 const APUNTES_HEADERS = Object.freeze([
   'ID',
   'Semana',
@@ -324,6 +334,7 @@ function onOpen() {
     .addItem('Instalar automatización Gmail', 'instalarDisparadorGmail')
     .addItem('Eliminar automatización Gmail', 'eliminarDisparadoresGmail')
     .addSeparator()
+    .addItem('Equivalencias de proveedor', 'abrirHomologacion')
     .addItem('Diagnosticar cruce de proveedores', 'diagnosticarCruceProveedores')
     .addToUi();
 }
@@ -376,17 +387,21 @@ function getDashboardData(monthPrefix) {
     /^\d{4}-\d{2}$/.test(String(monthPrefix || '')) ? monthPrefix : currentPrefix
   );
 
-  const planResult = readPlan_(spreadsheet, month);
+  // Una sola lectura de la tabla de equivalencias para todo el cruce.
+  const homologacion = readHomologacion_(spreadsheet);
+  const aliases = homologacion.map;
+
+  const planResult = readPlan_(spreadsheet, month, aliases);
   const planCandidates = planResult.rows.map(function(item) {
     return item.provider;
   });
 
   const ingresosResult = readIngresos_(
-    spreadsheet, timezone, month, planCandidates
+    spreadsheet, timezone, month, planCandidates, aliases
   );
 
   const gmailResult = readGmailProviderRows_(
-    spreadsheet, timezone, month, planCandidates
+    spreadsheet, timezone, month, planCandidates, aliases
   );
 
   const supplement = buildSupplementRows_(
@@ -443,9 +458,13 @@ function getDashboardData(monthPrefix) {
       gmailProviderRows: gmailResult.rows.length,
       planProviders: planResult.rows.length,
       unmatchedProviders: buildUnmatchedProviders_(
-        planResult.rows, combinedRows
-      )
+        planResult.rows, combinedRows, planCandidates
+      ),
+      similarProviders: findSimilarProviders_(providers),
+      duplicateRows: findDuplicateRows_(combinedRows),
+      aliasCount: homologacion.rows.length
     },
+    homologacion: homologacion.rows,
     filters: {
       providers: providers,
       predios: uniqueSorted_(
@@ -654,7 +673,7 @@ function isoWeekKey_(dateKey) {
  * LECTURA DE PLAN
  * ===================================================================== */
 
-function readPlan_(spreadsheet, month) {
+function readPlan_(spreadsheet, month, aliases) {
   const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_PLAN);
 
   if (!sheet || sheet.getLastRow() < 2) {
@@ -719,6 +738,7 @@ function readPlan_(spreadsheet, month) {
 
     const match = resolveProvider_(providerRaw, {
       source: 'PLAN',
+      aliases: aliases,
       group: currentGroup,
       predio: providerRaw,
       candidates: []
@@ -859,7 +879,7 @@ function parseMonthHeader_(value) {
  * LECTURA DE INGRESOS REALES
  * ===================================================================== */
 
-function readIngresos_(spreadsheet, timezone, month, planCandidates) {
+function readIngresos_(spreadsheet, timezone, month, planCandidates, aliases) {
   const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_INGRESOS);
 
   if (!sheet) {
@@ -904,6 +924,7 @@ function readIngresos_(spreadsheet, timezone, month, planCandidates) {
     if (!cache[cacheKey]) {
       cache[cacheKey] = resolveProvider_(providerRaw, {
         source: 'INGRESOS',
+        aliases: aliases,
         predio: predio,
         rol: rol,
         candidates: planCandidates
@@ -991,7 +1012,8 @@ function importGmailReports_(rebuild) {
       Utilities.formatDate(new Date(), timezone, 'yyyy-MM')
     );
 
-    const plan = readPlan_(spreadsheet, month);
+    const aliases = readHomologacion_(spreadsheet).map;
+    const plan = readPlan_(spreadsheet, month, aliases);
     const candidates = plan.rows.map(function(item) {
       return item.provider;
     });
@@ -1050,6 +1072,7 @@ function importGmailReports_(rebuild) {
           parsed.rows.forEach(function(item) {
             const match = resolveProvider_(item.providerRaw, {
               source: 'GMAIL',
+              aliases: aliases,
               rol: item.rol,
               candidates: candidates
             });
@@ -1619,7 +1642,9 @@ function htmlToText_(html) {
  * LECTURA DE INFORMEGMAIL
  * ===================================================================== */
 
-function readGmailProviderRows_(spreadsheet, timezone, month, planCandidates) {
+function readGmailProviderRows_(
+  spreadsheet, timezone, month, planCandidates, aliases
+) {
   const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_GMAIL);
 
   if (!sheet || sheet.getLastRow() < 2) {
@@ -1717,6 +1742,7 @@ function readGmailProviderRows_(spreadsheet, timezone, month, planCandidates) {
         }
       : resolveProvider_(providerRaw, {
           source: 'GMAIL',
+          aliases: aliases,
           rol: text_(row[headerMap['rol']]),
           candidates: planCandidates
         });
@@ -2124,6 +2150,207 @@ function formatApuntesSheet_(sheet) {
  * HOMOLOGACIÓN DE PROVEEDORES
  * ===================================================================== */
 
+/* =====================================================================
+ * HOMOLOGACIÓN: LA TABLA DE EQUIVALENCIAS
+ *
+ * SAP no escribe los nombres como los escribe el Plan. "INMOB FORESTAL E
+ * INVER SAVI LTDA" y "SAVI" son el mismo proveedor, y el cruce difuso
+ * acierta la mayoría de las veces pero no todas. Cuando falla, el nombre
+ * de SAP entra como un proveedor nuevo: el mismo abastecedor aparece dos
+ * veces, una con su plan y otra sin él, y los totales dejan de cuadrar.
+ *
+ * Antes eso solo se arreglaba editando specialProvider_ en el código.
+ * Ahora hay una hoja que el comprador mantiene desde el tablero: cada
+ * fila dice "este nombre de origen es este proveedor del Plan". Manda
+ * sobre las reglas del código, porque es una decisión explícita de quien
+ * conoce a los proveedores.
+ *
+ * Orden de resolución:
+ *   1. Equivalencia guardada en la hoja   (decisión del comprador)
+ *   2. Regla explícita del código          (specialProvider_)
+ *   3. Coincidencia aproximada             (sobre el umbral)
+ *   4. Nombre normalizado                  (queda sin homologar)
+ * ===================================================================== */
+
+/**
+ * Equivalencias guardadas como { 'NOMBRE NORMALIZADO': 'Proveedor Plan' }.
+ * Si la hoja no existe todavía, devuelve un mapa vacío: el tablero
+ * funciona igual, solo que sin correcciones manuales.
+ */
+function readHomologacion_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_HOMOLOGACION);
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return { map: {}, rows: [] };
+  }
+
+  const values = sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, HOMOLOGACION_HEADERS.length)
+    .getValues();
+
+  const map = {};
+  const rows = [];
+
+  values.forEach(function(row) {
+    const origin = text_(row[0]);
+    const target = text_(row[1]);
+
+    if (!origin || !target) { return; }
+
+    map[normalizeKey_(origin)] = target;
+
+    rows.push({
+      origin: origin,
+      target: target,
+      source: text_(row[2]),
+      notes: text_(row[3]),
+      author: text_(row[4])
+    });
+  });
+
+  return { map: map, rows: rows };
+}
+
+function ensureHomologacionSheet_(spreadsheet) {
+  let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_HOMOLOGACION);
+
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(CONFIG.SHEET_HOMOLOGACION);
+  }
+
+  sheet
+    .getRange(1, 1, 1, HOMOLOGACION_HEADERS.length)
+    .setValues([HOMOLOGACION_HEADERS])
+    .setBackground('#153c27')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold');
+
+  sheet.setFrozenRows(1);
+
+  [260, 200, 110, 300, 200, 150].forEach(function(width, index) {
+    sheet.setColumnWidth(index + 1, width);
+  });
+
+  return sheet;
+}
+
+/**
+ * Guarda equivalencias desde el tablero. Un mismo nombre de origen se
+ * actualiza en su fila: la hoja no acumula versiones del mismo cruce.
+ * Un destino vacío borra la equivalencia.
+ */
+function guardarEquivalencias(pairs) {
+  if (!pairs || !pairs.length) {
+    return { saved: 0, removed: 0 };
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const sheet = ensureHomologacionSheet_(spreadsheet);
+    const author = getActiveUserLabel_();
+    const now = new Date();
+
+    const existing = sheet.getLastRow() > 1
+      ? sheet.getRange(2, 1, sheet.getLastRow() - 1, HOMOLOGACION_HEADERS.length)
+          .getValues()
+      : [];
+
+    const rowOf = {};
+
+    existing.forEach(function(row, index) {
+      const key = normalizeKey_(row[0]);
+      if (key) { rowOf[key] = index + 2; }
+    });
+
+    const appended = [];
+    const dropRows = [];
+
+    let saved = 0;
+    let removed = 0;
+
+    pairs.forEach(function(pair) {
+      const origin = text_(pair && pair.origin);
+
+      if (!origin) { return; }
+
+      const key = normalizeKey_(origin);
+      const target = text_(pair.target);
+
+      // Sin destino se entiende como "olvida esta equivalencia".
+      if (!target) {
+        if (rowOf[key]) {
+          dropRows.push(rowOf[key]);
+          removed++;
+        }
+        return;
+      }
+
+      const values = [
+        origin,
+        target,
+        text_(pair.source) || 'Tablero',
+        text_(pair.notes),
+        author,
+        now
+      ];
+
+      if (rowOf[key]) {
+        sheet
+          .getRange(rowOf[key], 1, 1, HOMOLOGACION_HEADERS.length)
+          .setValues([values]);
+      } else {
+        appended.push(values);
+      }
+
+      saved++;
+    });
+
+    if (appended.length) {
+      sheet
+        .getRange(
+          sheet.getLastRow() + 1, 1,
+          appended.length, HOMOLOGACION_HEADERS.length
+        )
+        .setValues(appended);
+    }
+
+    // De abajo hacia arriba: borrar de arriba correría las filas de abajo.
+    dropRows.sort(function(a, b) { return b - a; })
+      .forEach(function(row) { sheet.deleteRow(row); });
+
+    if (sheet.getLastRow() > 1) {
+      sheet.getRange(2, 6, sheet.getLastRow() - 1, 1)
+        .setNumberFormat('dd/MM/yyyy HH:mm');
+    }
+
+    return { saved: saved, removed: removed };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Abre la hoja de equivalencias desde el menú, creándola si hace falta.
+ */
+function abrirHomologacion() {
+  const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const sheet = ensureHomologacionSheet_(spreadsheet);
+
+  SpreadsheetApp.setActiveSheet(sheet);
+
+  SpreadsheetApp.getUi().alert(
+    'Equivalencias de proveedor\n\n' +
+    'Cada fila dice que un nombre de origen (el de SAP o el del informe) ' +
+    'es un proveedor del Plan.\n\n' +
+    'Se puede escribir a mano acá, pero es más seguro hacerlo desde el ' +
+    'tablero: pestaña Detalle, "Proveedores sin homologar". Ahí el nombre ' +
+    'viene escrito tal cual llegó y no hay que copiarlo.'
+  );
+}
+
 function resolveProvider_(rawName, context) {
   context = context || {};
 
@@ -2131,6 +2358,16 @@ function resolveProvider_(rawName, context) {
   const predio = normalizeKey_(context.predio || '');
   const group = normalizeKey_(context.group || '');
   const rol = normalizeKey_(context.rol || '');
+
+  // 1. La equivalencia que guardó el comprador manda sobre todo lo demás:
+  // es una decisión explícita de quien conoce a los proveedores, y tiene
+  // que poder corregir una regla del código que esté equivocada.
+  const aliases = context.aliases || {};
+  const alias = aliases[raw];
+
+  if (alias) {
+    return { provider: alias, method: 'Equivalencia guardada', score: 1 };
+  }
 
   const special = specialProvider_(raw, predio, group, rol);
 
@@ -2311,18 +2548,176 @@ function levenshtein_(a, b) {
   return matrix[b.length][a.length];
 }
 
-function buildUnmatchedProviders_(planRows, dataRows) {
+/**
+ * Proveedores que llegaron con material pero no tienen fila en Plan.
+ *
+ * Ya no es solo una lista de nombres: trae con cuánto volumen entra cada
+ * uno, cuántas filas lo traen, el nombre tal cual vino del origen y el
+ * mejor candidato del Plan con su puntaje. Con eso el tablero puede
+ * ofrecer la equivalencia hecha y que el comprador solo confirme, en vez
+ * de mostrarle el problema y dejarlo solo.
+ */
+function buildUnmatchedProviders_(planRows, dataRows, planCandidates) {
   const planMap = {};
 
   planRows.forEach(function(item) {
     planMap[item.provider] = true;
   });
 
-  return uniqueSorted_(
-    dataRows
-      .map(function(item) { return item.provider; })
-      .filter(function(provider) { return !planMap[provider]; })
-  );
+  const buckets = {};
+
+  dataRows.forEach(function(item) {
+    if (planMap[item.provider]) { return; }
+
+    let bucket = buckets[item.provider];
+
+    if (!bucket) {
+      bucket = buckets[item.provider] = {
+        provider: item.provider,
+        rawNames: {},
+        rows: 0,
+        amount: 0,
+        sources: {},
+        predios: {},
+        roles: {}
+      };
+    }
+
+    bucket.rows++;
+    bucket.amount += Number(item.cantidad) || 0;
+    bucket.sources[item.source] = true;
+
+    if (item.providerRaw) { bucket.rawNames[item.providerRaw] = true; }
+    if (item.predio) { bucket.predios[item.predio] = true; }
+    if (item.rol) { bucket.roles[item.rol] = true; }
+  });
+
+  const candidates = planCandidates || [];
+
+  return Object.keys(buckets)
+    .map(function(key) {
+      const bucket = buckets[key];
+      const rawNames = Object.keys(bucket.rawNames).sort();
+
+      // El mejor candidato del Plan para el nombre tal cual llegó.
+      const probe = providerComparable_(
+        normalizeKey_(rawNames[0] || bucket.provider)
+      );
+
+      let best = null;
+
+      candidates.forEach(function(candidate) {
+        const score = providerSimilarity_(
+          probe, providerComparable_(candidate)
+        );
+
+        if (!best || score > best.score) {
+          best = { provider: candidate, score: round_(score, 3) };
+        }
+      });
+
+      return {
+        provider: bucket.provider,
+        rawNames: rawNames,
+        // El nombre que hay que guardar como equivalencia es el de origen.
+        origin: rawNames[0] || bucket.provider,
+        rows: bucket.rows,
+        amount: round_(bucket.amount, 2),
+        sources: Object.keys(bucket.sources).sort(),
+        predios: Object.keys(bucket.predios).sort().slice(0, 4),
+        roles: Object.keys(bucket.roles).sort().slice(0, 4),
+        suggestion: best ? best.provider : '',
+        suggestionScore: best ? best.score : 0
+      };
+    })
+    .sort(function(a, b) { return b.amount - a.amount; });
+}
+
+/**
+ * Proveedores homologados que se parecen demasiado entre sí. Si dos filas
+ * del cruce son en realidad el mismo abastecedor, el plan se reparte entre
+ * las dos y ninguna cumple. Solo avisa: unirlos es decisión del comprador,
+ * y se hace guardando una equivalencia.
+ */
+function findSimilarProviders_(providers) {
+  const UMBRAL = 0.80;
+  const pairs = [];
+
+  const prepared = providers.map(function(provider) {
+    return { provider: provider, key: providerComparable_(normalizeKey_(provider)) };
+  });
+
+  for (let i = 0; i < prepared.length; i++) {
+    for (let j = i + 1; j < prepared.length; j++) {
+      if (!prepared[i].key || !prepared[j].key) { continue; }
+
+      const score = providerSimilarity_(prepared[i].key, prepared[j].key);
+
+      if (score >= UMBRAL) {
+        pairs.push({
+          a: prepared[i].provider,
+          b: prepared[j].provider,
+          score: round_(score, 3)
+        });
+      }
+    }
+  }
+
+  return pairs.sort(function(x, y) { return y.score - x.score; });
+}
+
+/**
+ * Filas de Ingresos idénticas en todo lo que las identifica. Un mismo
+ * despacho cargado dos veces —el export de SAP pegado de nuevo— duplica
+ * el volumen sin que nada lo delate. No se borra nada: se cuenta y se
+ * avisa, porque dos guías distintas pueden coincidir legítimamente en
+ * todos estos campos y solo el comprador sabe cuál es cuál.
+ */
+function findDuplicateRows_(rows) {
+  const seen = {};
+  const groups = [];
+
+  rows.forEach(function(item) {
+    if (item.source !== 'INGRESOS') { return; }
+
+    const key = [
+      item.fecha,
+      normalizeKey_(item.providerRaw || item.provider),
+      normalizeKey_(item.material),
+      normalizeKey_(item.predio),
+      normalizeKey_(item.rol),
+      round_(Number(item.cantidad) || 0, 3)
+    ].join('|');
+
+    if (!seen[key]) {
+      seen[key] = { count: 0, item: item };
+      return;
+    }
+
+    seen[key].count++;
+  });
+
+  Object.keys(seen).forEach(function(key) {
+    const entry = seen[key];
+
+    if (!entry.count) { return; }
+
+    groups.push({
+      fecha: entry.item.fecha,
+      fechaLabel: entry.item.fechaLabel,
+      provider: entry.item.provider,
+      material: entry.item.descripcion || entry.item.material,
+      predio: entry.item.predio,
+      cantidad: round_(Number(entry.item.cantidad) || 0, 2),
+      // Veces que aparece la fila en total, contando la primera.
+      veces: entry.count + 1,
+      // Lo que se contaría de más si las repeticiones fueran cargas
+      // duplicadas: todas menos la primera.
+      exceso: round_((Number(entry.item.cantidad) || 0) * entry.count, 2)
+    });
+  });
+
+  return groups.sort(function(a, b) { return b.exceso - a.exceso; });
 }
 
 function diagnosticarCruceProveedores() {
@@ -2347,12 +2742,36 @@ function diagnosticarCruceProveedores() {
     'Última fecha real: ' + data.source.lastActualDateLabel,
     'Último informe: ' + data.source.latestReportDateLabel,
     '',
+    'Equivalencias guardadas: ' + data.source.aliasCount,
+    'Filas repetidas en Ingresos: ' + (
+      data.source.duplicateRows.length
+        ? data.source.duplicateRows.length + ' (' +
+          fmtNumber_(data.source.duplicateRows.reduce(function(total, item) {
+            return total + item.exceso;
+          }, 0)) + ' MR de más si son cargas repetidas)'
+        : 'ninguna'
+    ),
+    'Proveedores parecidos entre sí: ' + (
+      data.source.similarProviders.length
+        ? data.source.similarProviders.map(function(pair) {
+            return pair.a + ' ≈ ' + pair.b;
+          }).join(', ')
+        : 'ninguno'
+    ),
+    '',
     'Sin coincidencia en Plan:'
   ];
 
   if (data.source.unmatchedProviders.length) {
-    data.source.unmatchedProviders.forEach(function(provider) {
-      lines.push('- ' + provider);
+    data.source.unmatchedProviders.forEach(function(item) {
+      lines.push(
+        '- ' + item.provider + '  (' + fmtNumber_(item.amount) + ' MR' +
+        (item.suggestion
+          ? ', parecido a ' + item.suggestion +
+            ' ' + Math.round(item.suggestionScore * 100) + '%'
+          : '') +
+        ')'
+      );
     });
   } else {
     lines.push('Ninguno');
@@ -2660,6 +3079,13 @@ function joinUnique_(current, next) {
     .filter(Boolean);
 
   return uniqueSorted_(values).join(' / ');
+}
+
+/** Cifra con separador de miles, para los avisos del menú. */
+function fmtNumber_(value) {
+  const number = Math.round(Number(value) || 0);
+
+  return String(number).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
 function round_(value, decimals) {

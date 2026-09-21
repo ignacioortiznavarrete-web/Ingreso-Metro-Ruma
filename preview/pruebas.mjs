@@ -354,6 +354,56 @@ ok('la tabla forestal abre la ficha',
    await q.locator('.drawer').count() > 0);
 await q.keyboard.press('Escape'); await q.waitForTimeout(300);
 
+/* ============ homologacion desde el tablero ============ */
+await q.keyboard.press('5'); await q.waitForTimeout(800);
+
+ok('lista los proveedores sin homologar',
+   await q.locator('.alias').count() === 2,
+   (await q.locator('.alias').count()) + ' por resolver');
+
+// El nombre tal cual llegó de SAP tiene que estar a la vista: es lo que
+// el comprador compara para decidir.
+ok('muestra el nombre de origen',
+   (await q.locator('.alias .alias-raw').first().innerText())
+     .includes('TRANSPORTES PEÑA Y CIA LTDA'));
+
+ok('trae el volumen que arrastra',
+   (await q.locator('.alias .alias-detail').first().innerText()).includes('MR'));
+
+// La sugerencia viene elegida, que es lo que hace que sea un clic.
+ok('preselecciona el mejor candidato',
+   await q.locator('.alias select').nth(1).inputValue() === 'SAVI',
+   'alias1=' + (await q.locator('.alias select').nth(1).inputValue()));
+
+// Un parecido bajo tiene que avisar antes de que lo guarden a ciegas.
+ok('avisa cuando el parecido es bajo',
+   (await q.locator('.alias .alias-hint').first().innerText())
+     .includes('revisa antes de guardar'),
+   await q.locator('.alias .alias-hint').first().innerText());
+
+ok('el botón cuenta lo elegido',
+   (await q.locator('#aliasPending').innerText()).startsWith('2'),
+   await q.locator('#aliasPending').innerText());
+
+await q.selectOption('#alias0', ''); await q.waitForTimeout(250);
+ok('desasignar descuenta del contador',
+   (await q.locator('#aliasPending').innerText()).startsWith('1'),
+   await q.locator('#aliasPending').innerText());
+
+await q.click('#btnSaveAliases'); await q.waitForTimeout(1500);
+ok('guardar resuelve el proveedor', await q.locator('.alias').count() === 1,
+   (await q.locator('.alias').count()) + ' sin resolver');
+
+/* ============ posible doble conteo ============ */
+ok('avisa de las filas repetidas', await q.locator('#dupPanel').isVisible());
+ok('las lista una por una',
+   await q.locator('#dupList tbody tr').count() === 2,
+   (await q.locator('#dupList tbody tr').count()) + ' filas');
+ok('cuantifica el exceso',
+   (await q.locator('.dup-lead').first().innerText()).includes('MR de más'));
+ok('avisa de los proveedores parecidos',
+   await q.locator('.dup-pair').count() === 1);
+
 /* ============ sin desborde horizontal ============ */
 for (const width of [1600, 1280, 390]) {
   const page = await c3.newPage();

@@ -862,15 +862,244 @@ function renderHealth() {
     '</div>';
   }).join('');
 
-  var unmatched = source.unmatchedProviders || [];
+  renderUnmatched();
+  renderDuplicates();
+}
 
-  id('unmatchedList').innerHTML = unmatched.length
-    ? unmatched.map(function(name) {
-        return '<span class="tag tag-warn" style="margin:0 4px 4px 0">' +
-          esc(name) + '</span>';
-      }).join('')
-    : '<p class="panel-note">Todos los proveedores con movimiento tienen ' +
-      'su fila en Plan.</p>';
+/* =====================================================================
+ * HOMOLOGACIÓN DESDE EL TABLERO
+ *
+ * Antes esto era una lista de etiquetas naranjas: mostraba el problema y
+ * dejaba al comprador solo. Ahora cada nombre sin homologar viene con lo
+ * que trae de volumen, el mejor candidato del Plan ya elegido y un botón.
+ * Un clic y la equivalencia queda guardada en la hoja para siempre.
+ * ===================================================================== */
+
+function renderUnmatched() {
+  var host = id('unmatchedList');
+  var unmatched = (DATA.source || {}).unmatchedProviders || [];
+  var planNames = (DATA.plan || []).map(function(item) {
+    return item.provider;
+  }).sort(function(a, b) {
+    return a.localeCompare(b, 'es', { sensitivity: 'base' });
+  });
+
+  if (!unmatched.length) {
+    host.innerHTML = '<p class="panel-note">' +
+      (DATA.source.aliasCount
+        ? 'Todos los proveedores con movimiento cruzan con el Plan. Hay ' +
+          fmtInt(DATA.source.aliasCount) +
+          (DATA.source.aliasCount === 1
+            ? ' equivalencia guardada.' : ' equivalencias guardadas.')
+        : 'Todos los proveedores con movimiento cruzan con el Plan.') +
+      '</p>';
+    updateAliasPending();
+    return;
+  }
+
+  host.innerHTML = unmatched.map(function(item, index) {
+    var origin = item.origin || item.provider;
+
+    var detail = [
+      fmt(item.amount) + ' MR',
+      item.rows + (item.rows === 1 ? ' fila' : ' filas'),
+      item.sources.join(' + ')
+    ];
+
+    if (item.predios.length) {
+      detail.push(clip(item.predios.join(', '), 40));
+    }
+
+    var options = ['<option value="">— sin asignar —</option>']
+      .concat(planNames.map(function(name) {
+        return '<option value="' + esc(name) + '"' +
+          (name === item.suggestion ? ' selected' : '') + '>' +
+          esc(name) + '</option>';
+      }))
+      .join('');
+
+    return '<div class="alias" data-origin="' + esc(origin) + '"' +
+      ' style="--i:' + index + '">' +
+      '<div class="alias-id">' +
+        '<div class="alias-name">' + esc(item.provider) + '</div>' +
+        (origin !== item.provider
+          ? '<div class="alias-raw num">' + esc(origin) + '</div>'
+          : '') +
+        '<div class="alias-detail">' + esc(detail.join(' · ')) + '</div>' +
+      '</div>' +
+      '<div class="alias-pick">' +
+        '<label class="field-label" for="alias' + index + '">Es el proveedor</label>' +
+        '<select class="select" id="alias' + index + '">' + options + '</select>' +
+        (item.suggestion
+          ? '<div class="alias-hint">Parecido ' +
+            Math.round(item.suggestionScore * 100) + '%' +
+            (item.suggestionScore >= 0.6
+              ? ''
+              : ' · revisa antes de guardar') + '</div>'
+          : '<div class="alias-hint">Sin parecido en el Plan</div>') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  each('#unmatchedList select', function(select) {
+    select.addEventListener('change', updateAliasPending);
+  });
+
+  updateAliasPending();
+}
+
+/**
+ * Equivalencias elegidas pero todavía sin guardar.
+ */
+function pendingAliases() {
+  var out = [];
+
+  each('#unmatchedList .alias', function(node) {
+    var select = node.querySelector('select');
+
+    if (select && select.value) {
+      out.push({ origin: node.dataset.origin, target: select.value });
+    }
+  });
+
+  return out;
+}
+
+function updateAliasPending() {
+  var pending = pendingAliases();
+  var badge = id('aliasPending');
+  var button = id('btnSaveAliases');
+
+  if (!badge || !button) { return; }
+
+  button.disabled = !pending.length || BUSY;
+  badge.hidden = !pending.length;
+  badge.textContent = pending.length
+    ? pending.length + (pending.length === 1 ? ' por guardar' : ' por guardar')
+    : '';
+}
+
+function saveAliases() {
+  var pending = pendingAliases();
+
+  if (!pending.length) { return; }
+
+  setBusy(true, true);
+  id('btnSaveAliases').disabled = true;
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      toast(
+        result.saved +
+        (result.saved === 1 ? ' equivalencia guardada' : ' equivalencias guardadas') +
+        ' · recargando el cruce'
+      );
+      loadData(DATA.month.prefix);
+    })
+    .withFailureHandler(function(error) {
+      setBusy(false, true);
+      updateAliasPending();
+      showError(
+        'No se pudieron guardar las equivalencias. ' +
+        ((error && error.message) ? error.message : String(error))
+      );
+    })
+    .guardarEquivalencias(pending);
+}
+
+/**
+ * Lo que puede estar contándose dos veces: filas idénticas de Ingresos y
+ * proveedores homologados que se parecen demasiado entre sí.
+ */
+function renderDuplicates() {
+  var source = DATA.source || {};
+  var rows = source.duplicateRows || [];
+  var similar = source.similarProviders || [];
+  var panel = id('dupPanel');
+
+  if (!rows.length && !similar.length) {
+    panel.hidden = true;
+    return;
+  }
+
+  panel.hidden = false;
+
+  var parts = [];
+
+  if (rows.length) {
+    var exceso = rows.reduce(function(total, item) {
+      return total + item.exceso;
+    }, 0);
+
+    parts.push(
+      '<p class="dup-lead">' +
+        '<b>' + fmtInt(rows.length) +
+        (rows.length === 1
+          ? ' fila de Ingresos se repite</b> exacta en fecha, proveedor, ' +
+            'material, predio, rol y cantidad. '
+          : ' filas de Ingresos se repiten</b> exactas en fecha, proveedor, ' +
+            'material, predio, rol y cantidad. ') +
+        'Si son cargas duplicadas del export de SAP, el mes trae ' +
+        '<b class="num">' + fmt(exceso) + ' MR</b> de más. Dos guías ' +
+        'distintas pueden coincidir en todo eso, así que solo tú puedes ' +
+        'decidirlo.' +
+      '</p>' +
+      '<div class="table-wrap" style="max-height:260px">' +
+        duplicateTable(rows) +
+      '</div>'
+    );
+  }
+
+  if (similar.length) {
+    parts.push(
+      '<p class="dup-lead">' +
+        '<b>' + fmtInt(similar.length) +
+        (similar.length === 1
+          ? ' par de proveedores se parece</b> demasiado. '
+          : ' pares de proveedores se parecen</b> demasiado. ') +
+        'Si son el mismo abastecedor, su plan está repartido entre dos ' +
+        'filas y ninguna cumple. Se unen guardando una equivalencia.' +
+      '</p>' +
+      '<div class="dup-pairs">' +
+        similar.map(function(pair) {
+          return '<div class="dup-pair">' +
+            '<span class="num">' + esc(pair.a) + '</span>' +
+            '<span class="dup-approx">≈</span>' +
+            '<span class="num">' + esc(pair.b) + '</span>' +
+            '<span class="dup-score">' +
+              Math.round(pair.score * 100) + '%</span>' +
+          '</div>';
+        }).join('') +
+      '</div>'
+    );
+  }
+
+  id('dupList').innerHTML = parts.join('');
+}
+
+/** Las filas repetidas, con lo que cada una sumaría de más. */
+function duplicateTable(rows) {
+  return '<table class="table"><thead><tr>' +
+    '<th scope="col">Fecha</th>' +
+    '<th scope="col">Proveedor</th>' +
+    '<th scope="col">Material</th>' +
+    '<th scope="col">Predio</th>' +
+    '<th class="n" scope="col">Cantidad</th>' +
+    '<th class="n" scope="col">Veces</th>' +
+    '<th class="n" scope="col">De más</th>' +
+    '</tr></thead><tbody>' +
+    rows.slice(0, 60).map(function(item) {
+      return '<tr>' +
+        '<td class="num">' + esc(item.fechaLabel) + '</td>' +
+        '<td>' + esc(item.provider) + '</td>' +
+        '<td>' + esc(clip(item.material, 34)) + '</td>' +
+        '<td>' + esc(clip(item.predio, 24) || '—') + '</td>' +
+        cell(fmt(item.cantidad)) +
+        cell(String(item.veces), 'neg') +
+        cell(fmt(item.exceso), 'neg') +
+      '</tr>';
+    }).join('') +
+    '</tbody></table>';
 }
 
 /* =====================================================================

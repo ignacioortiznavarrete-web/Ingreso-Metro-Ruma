@@ -1651,6 +1651,90 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* =====================================================================
+ * HOMOLOGACIÓN
+ * El nombre que llegó a la izquierda, el proveedor del Plan a la derecha.
+ * Una fila por decidir, no una etiqueta de aviso.
+ * ===================================================================== */
+
+.alias {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 260px);
+  gap: 14px;
+  align-items: end;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  animation: lift .38s var(--out-quint) both;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+
+.alias:last-child { border-bottom: 0; padding-bottom: 0; }
+.alias:first-child { padding-top: 0; }
+
+.alias-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* El nombre tal cual lo escribe SAP: en monoespaciada, porque es un
+   dato que se compara carácter a carácter, no una etiqueta. */
+.alias-raw {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--hiviz-ink);
+  overflow-wrap: anywhere;
+}
+
+.alias-detail {
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.alias-pick .field-label { margin-bottom: 4px; }
+
+.alias-hint {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--ink-3);
+}
+
+/* =====================================================================
+ * POSIBLE DOBLE CONTEO
+ * ===================================================================== */
+
+.dup-lead {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.dup-lead + .table-wrap { margin-bottom: 16px; }
+
+.dup-pairs { display: grid; gap: 1px; background: var(--line); }
+
+.dup-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 9px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  background: var(--panel);
+}
+
+.dup-approx { color: var(--hiviz-ink); font-weight: 700; }
+
+.dup-score {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+/* =====================================================================
  * ZONA DE ACCIÓN
  * Qué hacer con el proveedor, no cómo va. Va en la tabla forestal.
  * ===================================================================== */
@@ -1797,6 +1881,7 @@ h1, h2, h3, p { margin: 0; }
 @media (max-width: 1240px) {
   .grid-hero, .grid-lead, .grid-2,
   .grid-cal { grid-template-columns: minmax(0, 1fr); }
+  .alias { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .filters-actions { grid-column: 1 / -1; }
 }

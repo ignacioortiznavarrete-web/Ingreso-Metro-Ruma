@@ -643,11 +643,20 @@
           <section class="panel" style="--i:1">
             <div class="panel-head">
               <div>
-                <h2 class="panel-title">Proveedores sin fila en Plan</h2>
+                <h2 class="panel-title">Proveedores sin homologar</h2>
                 <p class="panel-note">
-                  Llegó material a nombre de estos proveedores pero no tienen
-                  plan asociado. Se cuentan en el total y no en el cumplimiento.
+                  SAP no escribe los nombres como el Plan. Llegó material a
+                  nombre de estos y el cruce no encontró su fila, así que
+                  suman al total pero no a ningún cumplimiento. Elige a quién
+                  corresponde y queda guardado para siempre.
                 </p>
+              </div>
+              <div class="panel-tools">
+                <span class="pending" id="aliasPending" hidden></span>
+                <button type="button" class="btn btn-solid" id="btnSaveAliases"
+                        disabled>
+                  Guardar equivalencias
+                </button>
               </div>
             </div>
             <div class="panel-body">
@@ -655,6 +664,21 @@
             </div>
           </section>
         </div>
+
+        <section class="panel" id="dupPanel" hidden>
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Posible doble conteo</h2>
+              <p class="panel-note">
+                Nada se borra solo. Esto es lo que conviene revisar en la
+                planilla antes de creerle a los totales.
+              </p>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div id="dupList"></div>
+          </div>
+        </section>
 
         <section class="panel">
           <div class="panel-head">

@@ -217,6 +217,7 @@ function bindEvents() {
 
   id('btnDetailCopy').addEventListener('click', copyDetailTable);
   id('btnForestalCopy').addEventListener('click', copyForestalTable);
+  id('btnSaveAliases').addEventListener('click', saveAliases);
 
   each('#detailTable th.sortable', function(th) {
     th.addEventListener('click', function() {
@@ -461,7 +462,18 @@ function renderBanners() {
   if (unmatched) {
     warnings.push(
       unmatched + ' proveedor' + (unmatched === 1 ? '' : 'es') +
-      ' sin fila equivalente en Plan. Revisa la pestaña Detalle.'
+      ' sin homologar: su material suma al total pero no a ningún ' +
+      'cumplimiento. Se resuelve en Detalle, sin salir del tablero.'
+    );
+  }
+
+  var dupes = (DATA.source.duplicateRows || []).length;
+
+  if (dupes) {
+    warnings.push(
+      dupes + (dupes === 1 ? ' fila repetida' : ' filas repetidas') +
+      ' en Ingresos. Revisa "Posible doble conteo" en Detalle antes de ' +
+      'dar el mes por bueno.'
     );
   }
 
@@ -484,6 +496,10 @@ function setBusy(on, quiet) {
 
   ['btnSaveAll', 'btnDraft', 'btnWeekReport', 'btnWeekPrint']
     .forEach(function(name) { id(name).disabled = on; });
+
+  // Este botón depende además de si hay algo elegido, así que se
+  // recalcula en vez de seguir el estado de carga a secas.
+  updateAliasPending();
 
   if (!quiet) { id('veil').hidden = !on; }
 }
