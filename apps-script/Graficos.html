@@ -36,14 +36,35 @@ function ticks(max, count) {
   return out;
 }
 
+/**
+ * Atributos de un nodo SVG.
+ *
+ * `fillStyle` es especial: sale como estilo en línea en vez de atributo.
+ * Una clase CSS (.chart-label, .chart-value) le gana a un atributo de
+ * presentación como fill="...", así que el color se perdía sin avisar y
+ * los rótulos salían todos en gris. El estilo en línea sí manda.
+ */
 function attr(map) {
+  var fillStyle = map.fillStyle;
+
   return Object.keys(map)
     .filter(function(key) {
-      return map[key] !== null && map[key] !== undefined && map[key] !== '';
+      return key !== 'fillStyle' &&
+        map[key] !== null && map[key] !== undefined && map[key] !== '';
     })
     .map(function(key) {
-      return key + '="' + String(map[key]).replace(/"/g, '&quot;') + '"';
+      var value = key === 'style' && fillStyle
+        ? 'fill:' + fillStyle + ';' + map[key]
+        : map[key];
+
+      return key + '="' + String(value).replace(/"/g, '&quot;') + '"';
     })
+    .concat(
+      // Sin `style` propio, el color viaja solo.
+      fillStyle && map.style === undefined
+        ? ['style="fill:' + String(fillStyle).replace(/"/g, '&quot;') + '"']
+        : []
+    )
     .join(' ');
 }
 
@@ -187,7 +208,7 @@ function drawRuma() {
       y: barTop + barH - 9,
       'text-anchor': 'end',
       class: 'chart-label',
-      fill: PALETTE.hivizInk,
+      fillStyle: PALETTE.hivizInk,
       style: 'font-size:10px'
     }, 'proyección'));
   }
@@ -212,7 +233,7 @@ function drawRuma() {
       parts.push(tag('text', {
         x: width - padR, y: barTop - 28,
         'text-anchor': 'end', class: 'chart-label',
-        fill: PALETTE.ink3, style: 'font-size:10px'
+        fillStyle: PALETTE.ink3, style: 'font-size:10px'
       }, 'Plan del mes'));
 
       parts.push(tag('text', {
@@ -253,7 +274,7 @@ function flag(x, top, barH, title, value, color, width, side) {
     tag('circle', { cx: x, cy: top - 26, r: 2.6, fill: color }),
     tag('text', {
       x: safeX + dx, y: top - 28, 'text-anchor': anchor,
-      class: 'chart-label', fill: color,
+      class: 'chart-label', fillStyle: color,
       style: 'font-size:10px;font-weight:600'
     }, esc(title)),
     tag('text', {
@@ -457,6 +478,7 @@ function drawCurve() {
     'aria-label': 'Curva de avance acumulado contra el plan prorrateado.'
   }, parts.join(''));
 
+  layoutLegend(host, width);
   bindTips(host);
 }
 
@@ -499,28 +521,93 @@ function area(points, baseline, fill) {
   return tag('path', { d: d, fill: fill, class: 'ghost' });
 }
 
+/**
+ * Leyenda del gráfico. Cada entrada sale en su propio grupo y en el
+ * origen; layoutLegend() la corre a su sitio una vez que el SVG está en
+ * el documento y se puede medir el texto de verdad.
+ *
+ * Antes se estimaba el ancho multiplicando los caracteres por 5,4 px. Eso
+ * se pisa en cuanto cambia la tipografía: mientras Archivo no ha cargado
+ * —o si Google Fonts no responde— el respaldo del sistema es más ancho y
+ * las entradas quedaban una encima de otra.
+ */
 function legend(width, height, items) {
-  var x = 0;
-
-  return tag('g', { transform: 'translate(0,' + (height + 14) + ')' },
+  return tag('g', {
+    class: 'legend',
+    transform: 'translate(0,' + (height + 14) + ')'
+  },
     items.map(function(item) {
       var mark = item[2] === 'band'
-        ? tag('rect', { x: x, y: -6, width: 14, height: 8, fill: item[1], rx: 1 })
+        ? tag('rect', { x: 0, y: -6, width: 14, height: 8, fill: item[1], rx: 1 })
         : tag('line', {
-            x1: x, x2: x + 14, y1: -2, y2: -2,
+            x1: 0, x2: 14, y1: -2, y2: -2,
             stroke: item[1], 'stroke-width': 2.4,
             'stroke-dasharray': item[2] === 'dash' ? '4 3' : null,
             'stroke-linecap': 'round'
           });
 
       var label = tag('text', {
-        x: x + 19, y: 1.5, class: 'chart-label', style: 'font-size:10px'
+        x: 19, y: 1.5, class: 'chart-label', style: 'font-size:10px'
       }, esc(item[0]));
 
-      x += 19 + item[0].length * 5.4 + 16;
-      return mark + label;
+      return tag('g', { class: 'legend-item' }, mark + label);
     }).join('')
   );
+}
+
+/**
+ * Reparte las entradas de la leyenda midiendo el texto ya pintado, y
+ * pasa a una segunda fila si no caben en el ancho del gráfico.
+ */
+function layoutLegend(host, width) {
+  var group = host.querySelector('.legend');
+
+  if (!group) { return; }
+
+  var GAP = 17;
+  var ROW = 14;
+  var x = 0;
+  var row = 0;
+
+  Array.prototype.forEach.call(
+    group.querySelectorAll('.legend-item'),
+    function(item) {
+      var text = item.querySelector('text');
+      var label = 0;
+
+      try {
+        label = text.getComputedTextLength();
+      } catch (error) {
+        // Navegador que no sabe medir: se cae a la estimación anterior.
+        label = (text.textContent || '').length * 5.4;
+      }
+
+      var span = 19 + label;
+
+      if (x > 0 && x + span > width) {
+        x = 0;
+        row++;
+      }
+
+      item.setAttribute(
+        'transform', 'translate(' + round(x) + ',' + (row * ROW) + ')'
+      );
+
+      x += span + GAP;
+    }
+  );
+
+  // Si la leyenda bajó una fila, el SVG necesita ese alto extra.
+  if (row > 0) {
+    var svg = host.querySelector('svg');
+    var box = (svg.getAttribute('viewBox') || '').split(' ');
+
+    if (box.length === 4) {
+      var tall = Number(box[3]) + row * ROW;
+      svg.setAttribute('viewBox', box[0] + ' ' + box[1] + ' ' + box[2] + ' ' + tall);
+      svg.setAttribute('height', tall);
+    }
+  }
 }
 
 /* ---------------------------------------------------------------------
@@ -664,6 +751,7 @@ function drawDaily() {
     'aria-label': 'Recepción diaria contra el plan por día hábil.'
   }, parts.join(''));
 
+  layoutLegend(host, width);
   bindTips(host);
 }
 
@@ -771,13 +859,13 @@ function drawGap() {
   parts.push(tag('text', {
     x: labelW, y: height - padB + 36,
     class: 'chart-label', 'text-anchor': 'start',
-    style: 'font-size:10px', fill: PALETTE.crit
+    style: 'font-size:10px', fillStyle: PALETTE.crit
   }, '\u2190  hay que recuperar'));
 
   parts.push(tag('text', {
     x: width - padR, y: height - padB + 36,
     class: 'chart-label', 'text-anchor': 'end',
-    style: 'font-size:10px', fill: PALETTE.brand
+    style: 'font-size:10px', fillStyle: PALETTE.brand
   }, 'va sobre plan \u2192'));
 
   host.innerHTML = tag('svg', {
@@ -907,7 +995,7 @@ function drawPareto() {
   parts.push(tag('text', {
     x: width - padR, y: toYp(80) - 5,
     'text-anchor': 'end', class: 'chart-label',
-    fill: PALETTE.hivizInk, style: 'font-size:10px'
+    fillStyle: PALETTE.hivizInk, style: 'font-size:10px'
   }, '80% de la brecha'));
 
   if (crossed >= 0) {
@@ -925,6 +1013,607 @@ function drawPareto() {
   }, parts.join(''));
 
   bindTips(host);
+}
+
+/* ---------------------------------------------------------------------
+ * CALENDARIO DE DÍAS HÁBILES
+ * El plan a la fecha se apoya entero en este conteo, así que se dibuja:
+ * cada día del mes con su motivo, para revisar el prorrateo de un vistazo
+ * sin abrir el código.
+ * ------------------------------------------------------------------- */
+
+function drawCalendar() {
+  var host = id('chartCalendar');
+
+  if (!host) { return; }
+
+  var wd = workdays();
+  var days = wd.calendar || [];
+
+  if (!days.length) {
+    host.innerHTML = '<div class="chart-empty">Sin calendario para el mes ' +
+      'seleccionado.</div>';
+    return;
+  }
+
+  var NAMES = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  var cells = [];
+
+  // Rejilla de lunes a domingo: el primer día se desplaza a su columna.
+  var lead = (days[0].dayOfWeek + 6) % 7;
+
+  for (var pad = 0; pad < lead; pad++) {
+    cells.push(tag('div', {
+      class: 'cal-cell is-pad', 'aria-hidden': 'true'
+    }, ''));
+  }
+
+  days.forEach(function(day, index) {
+    var classes = ['cal-cell', 'is-' + day.kind];
+
+    if (day.elapsed) { classes.push('is-elapsed'); }
+    if (day.isReference) { classes.push('is-cut'); }
+
+    var reason = day.reason ||
+      (day.kind === 'weekend' ? 'Fin de semana' : 'Día hábil');
+
+    var tip = tipRow(dmy(day.key), [
+      ['Cuenta para el plan',
+        day.kind === 'workday' || day.kind === 'recovered' ? 'Sí' : 'No'],
+      ['Motivo', reason],
+      day.elapsed ? ['Estado', 'Transcurrido'] : null,
+      day.isReference ? ['Corte', 'Fecha de referencia'] : null
+    ]);
+
+    classes.push('cal-pop');
+
+    // tag() escapa solo las comillas del atributo, así que el HTML del
+    // tooltip llega entero. Con esc() se vería el marcado en crudo.
+    cells.push(tag('div', {
+      class: classes.join(' '),
+      'data-tip': tip,
+      style: '--i:' + index
+    },
+      tag('span', { class: 'cal-day num' }, String(day.day)) +
+      (day.kind === 'holiday'
+        ? tag('span', { class: 'cal-mark', 'aria-hidden': 'true' }, '')
+        : '') +
+      (day.kind === 'recovered'
+        ? tag('span', { class: 'cal-mark is-plus', 'aria-hidden': 'true' }, '+')
+        : '')
+    ));
+  });
+
+  var discounted = wd.discounted || [];
+
+  host.innerHTML =
+    '<div class="cal-head">' +
+      NAMES.map(function(name, index) {
+        return '<span class="cal-dow' +
+          (index >= 5 ? ' is-off' : '') + '">' + name + '</span>';
+      }).join('') +
+    '</div>' +
+    '<div class="cal-grid">' + cells.join('') + '</div>' +
+    '<div class="cal-foot">' +
+      '<span class="key"><span class="key-swatch key-swatch-cal"></span>' +
+        'Hábil transcurrido</span>' +
+      '<span class="key"><span class="key-swatch key-swatch-calnext"></span>' +
+        'Hábil por venir</span>' +
+      '<span class="key"><span class="key-swatch key-swatch-calhol"></span>' +
+        'Feriado o parada</span>' +
+      '<span class="key"><span class="key-swatch key-swatch-calweek"></span>' +
+        'Fin de semana</span>' +
+    '</div>' +
+    (discounted.length
+      ? '<ul class="cal-list">' + discounted.map(function(item) {
+          return '<li><b class="num">' + esc(dmy(item.key)) + '</b>' +
+            esc(item.reason) + '</li>';
+        }).join('') + '</ul>'
+      : '<p class="cal-none">Ningún feriado cayó en día hábil este mes.</p>');
+
+  bindTips(host);
+}
+
+/* ---------------------------------------------------------------------
+ * MIX POR PRODUCTO
+ * Qué se está comprando, no solo cuánto. Barras horizontales porque los
+ * nombres de producto son largos y se leen mejor en línea.
+ * ------------------------------------------------------------------- */
+
+function drawProductMix() {
+  var host = id('chartProduct');
+
+  if (!host) { return; }
+
+  var mix = buildProductMix(ROWS);
+  var rows = mix.list.slice(0, 9);
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="chart-empty">Las filas del filtro no ' +
+      'traen producto: el complemento Gmail no detalla material.</div>';
+    return;
+  }
+
+  var width = px(host);
+  var rowH = 30;
+  var padL = Math.min(230, Math.max(130, width * 0.3));
+  var padR = 76;
+  var padT = 8;
+  var height = padT + rows.length * rowH + 10;
+  var innerW = Math.max(60, width - padL - padR);
+  var max = niceMax(rows[0].total);
+
+  var parts = [];
+
+  rows.forEach(function(item, index) {
+    var y = padT + index * rowH;
+    var barW = max > 0 ? (item.total / max) * innerW : 0;
+
+    parts.push(tag('text', {
+      x: padL - 10, y: y + rowH / 2 + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, esc(clip(cap(item.label.toLowerCase()), 30))));
+
+    parts.push(tag('rect', {
+      x: padL, y: y + 5, width: innerW, height: rowH - 14,
+      rx: 2, fill: PALETTE.sunk
+    }));
+
+    parts.push(tag('rect', {
+      x: padL, y: y + 5,
+      width: Math.max(1, barW), height: rowH - 14,
+      rx: 2,
+      fill: index === 0 ? PALETTE.brand : PALETTE.brand2,
+      class: 'bar-wide',
+      style: 'animation-delay:' + (index * 30) + 'ms',
+      'data-tip': tipRow(cap(item.label.toLowerCase()), [
+        ['Recibido', fmt(item.total) + ' MR'],
+        ['Del total con producto', pctText(item.share)],
+        ['Proveedores', String(item.providers)],
+        item.predios ? ['Predios', String(item.predios)] : null,
+        item.material ? ['Código', item.material] : null
+      ])
+    }));
+
+    parts.push(tag('text', {
+      x: padL + Math.max(1, barW) + 8, y: y + rowH / 2 + 3.5,
+      class: 'chart-value'
+    }, pctText(item.share)));
+  });
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Mix por producto recibido.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  var note = id('productNote');
+
+  if (note) {
+    note.textContent = mix.complement > 0
+      ? 'Se desglosan ' + fmt(mix.declared) + ' MR de Ingresos. ' +
+        'Quedan fuera ' + fmt(mix.complement) + ' MR del complemento ' +
+        'Gmail, que llega sin material.'
+      : 'Se desglosan ' + fmt(mix.declared) + ' MR de Ingresos.';
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * FRENTES DE COSECHA (PREDIOS)
+ * ------------------------------------------------------------------- */
+
+function drawEstates() {
+  var host = id('chartEstates');
+
+  if (!host) { return; }
+
+  var mix = buildEstateMix(ROWS);
+  var rows = mix.list.slice(0, 12);
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="chart-empty">Las filas del filtro no ' +
+      'traen predio.</div>';
+    return;
+  }
+
+  var width = px(host);
+  var rowH = 27;
+  var padL = Math.min(210, Math.max(120, width * 0.28));
+  var padR = 96;
+  var padT = 8;
+  var height = padT + rows.length * rowH + 10;
+  var innerW = Math.max(60, width - padL - padR);
+  var max = niceMax(rows[0].total);
+
+  var parts = [];
+
+  rows.forEach(function(item, index) {
+    var y = padT + index * rowH;
+    var barW = max > 0 ? (item.total / max) * innerW : 0;
+    var stalled = item.stalled;
+
+    parts.push(tag('text', {
+      x: padL - 10, y: y + rowH / 2 + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, esc(clip(cap(item.predio.toLowerCase()), 26))));
+
+    parts.push(tag('rect', {
+      x: padL, y: y + 4, width: Math.max(1, barW), height: rowH - 12,
+      rx: 2,
+      fill: stalled ? PALETTE.hiviz : PALETTE.brand2,
+      class: 'bar-wide',
+      style: 'animation-delay:' + (index * 22) + 'ms',
+      'data-tip': tipRow(cap(item.predio.toLowerCase()), [
+        ['Recibido', fmt(item.total) + ' MR'],
+        ['Del total con predio', pctText(item.share)],
+        ['Proveedor', item.providers.join(', ')],
+        item.roles.length ? ['Rol', item.roles.join(' / ')] : null,
+        ['Días con movimiento', String(item.days)],
+        item.cadence !== null
+          ? ['Cadencia', 'una entrega cada ' + dec(item.cadence) + ' días']
+          : null,
+        ['Última recepción', dmy(item.lastDate)],
+        ['Sin mover', item.idleDays + ' días hábiles'],
+        stalled
+          ? ['Detenido', 'lleva más del doble de su cadencia']
+          : null
+      ])
+    }));
+
+    parts.push(tag('text', {
+      x: padL + Math.max(1, barW) + 8, y: y + rowH / 2 + 3.5,
+      class: 'chart-value',
+      fillStyle: stalled ? PALETTE.hivizInk : PALETTE.ink2
+    }, stalled
+      ? fmt(item.total) + ' · ' + item.idleDays + 'd'
+      : fmt(item.total)));
+  });
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Frentes de cosecha por volumen recibido.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  var note = id('estateNote');
+
+  if (note) {
+    note.textContent = mix.stalled.length
+      ? mix.active + ' predios entregaron este mes. ' +
+        mix.stalled.length + ' están detenidos: llevan más del doble de su ' +
+        'propia cadencia sin mover material (en naranja).'
+      : mix.active + ' predios entregaron este mes. Ninguno lleva más del ' +
+        'doble de su cadencia detenido.';
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * SEMÁFORO DECLARADO
+ * El estatus que el proveedor se pone en su propio informe.
+ * ------------------------------------------------------------------- */
+
+/* Los mismos colores que los puntos de las tablas (--st-* en Estilos):
+   el semáforo tiene que leerse igual en el gráfico y en la fila. */
+var STATUS_COLOR = {
+  VERDE: '#1c7a4c',
+  AMARILLO: '#9a6800',
+  NARANJO: '#9a6800',
+  NARANJA: '#9a6800',
+  ROJO: '#b0231a'
+};
+
+/**
+ * Tinta legible sobre un fondo: blanco o la tinta oscura, la que dé más
+ * contraste. Así un rótulo sobre el tramo del semáforo nunca queda
+ * ilegible, aunque mañana cambie el color del tramo.
+ */
+function inkOn(hex) {
+  var value = String(hex || '').replace('#', '');
+
+  if (value.length === 3) {
+    value = value[0] + value[0] + value[1] + value[1] + value[2] + value[2];
+  }
+
+  if (!/^[0-9a-fA-F]{6}$/.test(value)) { return PALETTE.ink; }
+
+  var channels = [0, 2, 4].map(function(offset) {
+    var srgb = parseInt(value.substr(offset, 2), 16) / 255;
+
+    return srgb <= 0.03928
+      ? srgb / 12.92
+      : Math.pow((srgb + 0.055) / 1.055, 2.4);
+  });
+
+  var luminance =
+    0.2126 * channels[0] +
+    0.7152 * channels[1] +
+    0.0722 * channels[2];
+
+  // Contraste contra blanco y contra la tinta oscura (luminancia 0,0136).
+  var onWhite = 1.05 / (luminance + 0.05);
+  var onInk = (luminance + 0.05) / 0.0636;
+
+  return onWhite >= onInk ? '#ffffff' : PALETTE.ink;
+}
+
+function drawStatus() {
+  var host = id('chartStatus');
+
+  if (!host) { return; }
+
+  var mix = buildStatusMix(ROWS);
+
+  if (!mix.slices.length) {
+    host.innerHTML = '<div class="chart-empty">Ninguna fila del filtro trae ' +
+      'estatus declarado. El estatus solo viene en el informe Gmail.</div>';
+    return;
+  }
+
+  var width = px(host);
+  var barH = 34;
+  var height = barH + 54;
+  var x = 0;
+
+  var parts = [];
+
+  mix.slices.forEach(function(slice, index) {
+    var w = slice.share * width;
+
+    parts.push(tag('rect', {
+      x: x, y: 8, width: Math.max(1, w), height: barH,
+      fill: STATUS_COLOR[slice.estatus] || PALETTE.line2,
+      class: 'bar-wide',
+      style: 'animation-delay:' + (index * 60) + 'ms;transform-origin:' +
+        x + 'px 0',
+      'data-tip': tipRow(cap(slice.estatus.toLowerCase()), [
+        ['Declaraciones', String(slice.count)],
+        ['Del total', pctText(slice.share)]
+      ])
+    }));
+
+    if (w > 52) {
+      parts.push(tag('text', {
+        x: x + w / 2, y: 8 + barH / 2 + 4,
+        'text-anchor': 'middle', class: 'chart-value',
+        fillStyle: inkOn(STATUS_COLOR[slice.estatus] || PALETTE.line2),
+        style: 'font-size:11px;font-weight:700'
+      }, pctText(slice.share)));
+    }
+
+    x += w;
+  });
+
+  var legendX = 0;
+
+  mix.slices.forEach(function(slice) {
+    var label = cap(slice.estatus.toLowerCase());
+
+    parts.push(tag('rect', {
+      x: legendX, y: barH + 22, width: 11, height: 11, rx: 2,
+      fill: STATUS_COLOR[slice.estatus] || PALETTE.line2
+    }));
+
+    parts.push(tag('text', {
+      x: legendX + 16, y: barH + 31, class: 'chart-label',
+      style: 'font-size:10.5px'
+    }, esc(label)));
+
+    legendX += 16 + label.length * 6.1 + 18;
+  });
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Reparto del estatus declarado en los informes.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  var note = id('statusNote');
+
+  if (note) {
+    var red = mix.slices.filter(function(slice) {
+      return slice.estatus === 'ROJO';
+    })[0];
+
+    note.textContent = red
+      ? mix.reported + ' proveedores declararon estatus. ' +
+        pctText(red.share) + ' de las declaraciones fue ROJO: son los que ' +
+        'avisan que no van a llegar.'
+      : mix.reported + ' proveedores declararon estatus. Ninguna ' +
+        'declaración en ROJO.';
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * MATRIZ RIESGO / ESFUERZO
+ * Eje x: cuántas veces el ritmo actual hay que exigir para cerrar.
+ * Eje y: metros ruma que se pierden si nada cambia.
+ * Tamaño: plan del mes. Separa el llamado del reemplazo de volumen.
+ * ------------------------------------------------------------------- */
+
+function drawPortfolio() {
+  var host = id('chartPortfolio');
+
+  if (!host) { return; }
+
+  var rows = buildPortfolio(SUMMARY).filter(function(item) {
+    return item.risk > 0;
+  });
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="chart-empty">Ningún proveedor cierra ' +
+      'bajo su plan al ritmo actual. No hay nada que empujar.</div>';
+    return;
+  }
+
+  var width = px(host);
+  var height = 330;
+  var padL = 56;
+  var padR = 22;
+  var padT = 20;
+  var padB = 62;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
+
+  var maxRisk = niceMax(rows[0].risk * 1.12);
+  var maxPlan = Math.max.apply(null, rows.map(function(item) {
+    return item.plan;
+  }).concat([1]));
+
+  var toX = function(effort) {
+    return padL + Math.min(1, effort / 4) * innerW;
+  };
+
+  var toY = function(risk) {
+    return padT + innerH - (risk / maxRisk) * innerH;
+  };
+
+  var parts = [];
+
+  ticks(maxRisk, 4).forEach(function(value) {
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, fmt(value)));
+  });
+
+  // Banda de esfuerzo: hasta 1x llega solo; sobre 1,6x hay que reemplazar.
+  parts.push(tag('rect', {
+    x: padL, y: padT, width: toX(1.15) - padL, height: innerH,
+    fill: 'rgba(36,57,94,.05)'
+  }));
+
+  parts.push(tag('rect', {
+    x: toX(1.6), y: padT, width: width - padR - toX(1.6), height: innerH,
+    fill: 'rgba(168,31,20,.05)'
+  }));
+
+  [[1, '1× ritmo actual'], [1.6, '1,6×'], [4, '4× o más']].forEach(
+    function(mark) {
+      var x = toX(mark[0]);
+
+      parts.push(tag('line', {
+        x1: x, x2: x, y1: padT, y2: padT + innerH,
+        stroke: PALETTE.line2, 'stroke-width': 1,
+        'stroke-dasharray': '4 4'
+      }));
+
+      parts.push(tag('text', {
+        x: x, y: padT + innerH + 15,
+        'text-anchor': 'middle', class: 'chart-axis'
+      }, mark[1]));
+    }
+  );
+
+  var placed = [];
+
+  rows.forEach(function(item, index) {
+    var r = 5 + Math.sqrt(item.plan / maxPlan) * 11;
+
+    parts.push(tag('circle', {
+      cx: toX(item.effort), cy: toY(item.risk), r: r,
+      fill: ZONE_COLOR[item.zone] || PALETTE.hiviz,
+      'fill-opacity': 0.72,
+      stroke: '#ffffff', 'stroke-width': 1.4,
+      class: 'blip',
+      style: 'animation-delay:' + (index * 38) + 'ms',
+      'data-tip': tipRow(item.provider, [
+        ['Qué hacer', ZONE_LABEL[item.zone]],
+        ['MR en riesgo', fmt(item.risk)],
+        ['Plan del mes', fmt(item.plan)],
+        ['Recibido', fmt(item.total)],
+        ['Ritmo actual', fmt(item.pace) + ' MR/día'],
+        item.requiredPace !== null
+          ? ['Ritmo exigido', fmt(item.requiredPace) + ' MR/día']
+          : null,
+        ['Esfuerzo', item.realEffort === null
+          ? 'sin ritmo para comparar'
+          : (item.effortCapped ? 'más de 4×' : dec(item.realEffort) + '×')]
+      ])
+    }));
+
+    // Los de mayor riesgo llevan nombre. Muchos proveedores se apilan
+    // contra el tope de 4x, así que la etiqueta se coloca al lado que
+    // tenga sitio y se omite si pisaría a otra ya puesta.
+    if (index < 6) {
+      var cx = toX(item.effort);
+      var cy = toY(item.risk);
+      var right = cx > padL + innerW * 0.62;
+
+      var label = {
+        x: right ? cx - r - 6 : cx + r + 6,
+        y: cy + 3.5,
+        anchor: right ? 'end' : 'start'
+      };
+
+      var collides = placed.some(function(other) {
+        return Math.abs(other.y - label.y) < 11 &&
+          Math.abs(other.x - label.x) < 96;
+      });
+
+      if (!collides) {
+        placed.push(label);
+
+        parts.push(tag('text', {
+          x: label.x, y: label.y,
+          'text-anchor': label.anchor,
+          class: 'chart-label ghost',
+          style: 'font-size:10px'
+        }, esc(clip(item.provider, 18))));
+      }
+    }
+  });
+
+  parts.push(tag('text', {
+    x: padL, y: height - 10, class: 'chart-axis'
+  }, 'Cuánto hay que empujar para cerrar el plan →'));
+
+  parts.push(tag('text', {
+    x: 13, y: padT + innerH / 2,
+    'text-anchor': 'middle', class: 'chart-axis',
+    transform: 'rotate(-90 13 ' + (padT + innerH / 2) + ')'
+  }, 'MR en riesgo'));
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Riesgo contra esfuerzo exigido por proveedor.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  var note = id('portfolioNote');
+
+  if (note) {
+    var replace = rows.filter(function(item) {
+      return item.zone === 'replace';
+    });
+
+    var nudge = rows.filter(function(item) {
+      return item.zone === 'nudge';
+    });
+
+    note.textContent =
+      fmt(rows.reduce(function(total, item) { return total + item.risk; }, 0)) +
+      ' MR en riesgo entre ' + rows.length + ' proveedores. ' +
+      (nudge.length
+        ? nudge.length + ' se arreglan con un llamado. '
+        : '') +
+      (replace.length
+        ? replace.length + ' no llegan ni al cuádruple de su ritmo: ese ' +
+          'volumen hay que buscarlo en otra parte.'
+        : 'Ninguno está fuera de alcance.');
+  }
 }
 
 /* ---------------------------------------------------------------------
@@ -1016,11 +1705,17 @@ function redrawCharts() {
 
   if (VIEW === 'panorama') {
     drawRuma();
+    drawCalendar();
     drawCurve();
     drawDaily();
   } else if (VIEW === 'proveedores') {
     drawGap();
     drawPareto();
+  } else if (VIEW === 'forestal') {
+    drawPortfolio();
+    drawStatus();
+    drawProductMix();
+    drawEstates();
   }
 }
 </script>

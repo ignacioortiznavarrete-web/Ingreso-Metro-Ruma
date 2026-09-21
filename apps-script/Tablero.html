@@ -20,6 +20,7 @@ function renderAll() {
   renderGauges();
   renderAttack();
   renderProviderTable();
+  renderForestal();
   renderDetail();
   renderHealth();
   renderWeekOptions();
@@ -209,8 +210,16 @@ function renderGauges() {
     }
   ];
 
-  id('gauges').innerHTML = cells.map(function(cell) {
-    return '<div class="gauge">' +
+  id('gauges').innerHTML = gaugeMarkup(cells);
+}
+
+/**
+ * Una sola superficie de mediciones, dividida por filetes de 1px. La usan
+ * el panorama y la vista forestal.
+ */
+function gaugeMarkup(cells) {
+  return cells.map(function(cell, index) {
+    return '<div class="gauge" style="--i:' + index + '">' +
       '<div class="gauge-key">' + esc(cell.key) +
         (cell.hint
           ? '<span class="hint" title="' + esc(cell.hint) + '">?</span>'
@@ -457,6 +466,266 @@ function tagFor(bandKey) {
 }
 
 var DETAIL_PAGE = 300;
+
+/* =====================================================================
+ * FORESTAL
+ * ===================================================================== */
+
+/**
+ * Mediciones del origen del suministro. No repiten las del panorama: aquí
+ * interesa de dónde viene el metro ruma y qué tan frágil es esa fuente.
+ */
+function renderForestalGauges() {
+  var host = id('gaugesForestal');
+
+  if (!host) { return; }
+
+  var wd = workdays();
+  var product = buildProductMix(ROWS);
+  var estates = buildEstateMix(ROWS);
+  var status = buildStatusMix(ROWS);
+  var autonomy = buildAutonomy(SUMMARY);
+  var portfolio = buildPortfolio(SUMMARY);
+
+  var received = SUMMARY.map(function(item) { return item.total; });
+  var concentration = herfindahl(received);
+  var core = headcountFor(received, 0.8);
+
+  var top = product.list[0];
+
+  var red = status.slices.filter(function(slice) {
+    return slice.estatus === 'ROJO';
+  })[0];
+
+  var replace = portfolio.filter(function(item) {
+    return item.zone === 'replace';
+  });
+
+  var lumpy = SUMMARY.filter(function(item) {
+    return item.variability !== null && item.variability > 0.8;
+  });
+
+  var cells = [
+    {
+      key: 'Autonomía del mes',
+      value: autonomy.ratio === null
+        ? (autonomy.missing > 0 ? 'Sin ritmo' : 'Cumplido')
+        : dec(autonomy.ratio) + '×',
+      tone: autonomy.ratio === null
+        ? (autonomy.missing > 0 ? 'crit' : 'over')
+        : (autonomy.ratio >= 1 ? 'over' : 'crit'),
+      note: autonomy.daysNeeded === null
+        ? (autonomy.missing > 0
+            ? 'Faltan ' + fmt(autonomy.missing) + ' MR y no hay ritmo'
+            : 'El plan ya está cubierto')
+        : 'Cerrar exige ' + dec(autonomy.daysNeeded) + ' días hábiles y ' +
+          'quedan ' + autonomy.daysLeft,
+      hint: 'Días hábiles que quedan ÷ días que tomaría cerrar la brecha al ' +
+        'ritmo actual. Bajo 1× el mes no cierra sin cambiar algo.'
+    },
+    {
+      key: 'Frentes activos',
+      value: String(estates.active),
+      tone: estates.stalled.length ? 'warn' : null,
+      note: estates.stalled.length
+        ? estates.stalled.length + ' detenidos sobre su propia cadencia'
+        : 'predios con movimiento, ninguno detenido',
+      hint: 'Predios distintos que movieron material en el período ' +
+        'filtrado. Detenido es el que lleva más del doble de su cadencia ' +
+        'habitual sin entregar. Solo cuenta Ingresos: el informe diario ' +
+        'no trae predio.'
+    },
+    {
+      key: 'Concentración',
+      value: core === null
+        ? '—'
+        : core + (core === 1 ? ' nombre' : ' nombres'),
+      tone: concentration !== null && concentration > 0.25 ? 'warn' : null,
+      note: core === null
+        ? 'Sin proveedores para comparar'
+        : 'hacen el 80% del suministro · Herfindahl ' + dec(concentration),
+      hint: 'Cuántos proveedores, de mayor a menor, explican el 80% de lo ' +
+        'recibido. Si son dos o tres, el mes depende de esos llamados. El ' +
+        'Herfindahl normalizado (0 repartido, 1 un solo nombre) sirve para ' +
+        'comparar un mes con otro.'
+    },
+    {
+      key: 'Producto principal',
+      value: top ? pctText(top.share) : '—',
+      note: top
+        ? clip(cap(top.label.toLowerCase()), 34)
+        : 'Sin producto en las filas del filtro',
+      hint: 'Participación del producto más comprado sobre el volumen que ' +
+        'trae material. El complemento Gmail no lo detalla.'
+    },
+    {
+      key: 'Declaran en rojo',
+      value: red ? pctText(red.share) : (status.total ? '0%' : '—'),
+      tone: red && red.share > 0.2 ? 'crit' : (red ? 'warn' : null),
+      note: status.total
+        ? 'de ' + fmtInt(status.total) + ' declaraciones del informe'
+        : 'Ninguna fila del filtro trae estatus',
+      hint: 'El proveedor se declara en rojo en su informe antes de que el ' +
+        'volumen caiga: sirve para llamar hoy y no la semana que viene.'
+    },
+    {
+      key: 'Fuera de alcance',
+      value: String(replace.length),
+      tone: replace.length ? 'crit' : null,
+      note: replace.length
+        ? fmt(sum(replace, 'risk')) + ' MR que hay que buscar en otra parte'
+        : 'Todo el riesgo es recuperable empujando',
+      hint: 'Proveedores que no cierran su plan ni exigiéndoles más de ' +
+        'cuatro veces su ritmo actual.'
+    },
+    {
+      key: 'Entregas a golpes',
+      value: String(lumpy.length),
+      tone: lumpy.length ? 'warn' : null,
+      note: lumpy.length
+        ? 'de ' + SUMMARY.length + ' proveedores entregan irregular'
+        : 'Las entregas vienen parejas',
+      hint: 'Proveedores cuya desviación diaria supera el 80% de su propio ' +
+        'promedio. Suele ser un problema de camiones, no de bosque.'
+    },
+    {
+      key: 'Predio principal',
+      value: estates.list.length ? pctText(estates.list[0].share) : '—',
+      note: estates.list.length
+        ? clip(cap(estates.list[0].predio.toLowerCase()), 34)
+        : 'Sin predio en las filas del filtro',
+      hint: 'Cuánto del suministro con predio identificado sale de un solo ' +
+        'frente de cosecha.'
+    },
+    {
+      key: 'Sin desglose',
+      value: product.total > 0
+        ? pctText(product.complement / product.total)
+        : '—',
+      note: product.complement > 0
+        ? fmt(product.complement) + ' MR del complemento Gmail'
+        : 'Todo el volumen trae material',
+      hint: 'Parte del volumen que llega por el informe diario, que no ' +
+        'detalla material ni predio. Es la ceguera del mes.'
+    }
+  ];
+
+  host.innerHTML = gaugeMarkup(cells);
+}
+
+/**
+ * Tabla de decisión: qué hacer con cada proveedor y con qué ritmo.
+ */
+function renderForestal() {
+  renderForestalGauges();
+
+  var body = id('forestalBody');
+
+  if (!body) { return; }
+
+  var rows = buildPortfolio(SUMMARY);
+  var status = buildStatusMix(ROWS);
+
+  id('forestalCount').textContent =
+    fmtInt(rows.length) + ' proveedores con plan';
+
+  if (!rows.length) {
+    body.innerHTML = '<tr class="empty"><td colspan="10">Ningún proveedor ' +
+      'con plan en el filtro seleccionado.</td></tr>';
+    return;
+  }
+
+  // El mapa evita recorrer SUMMARY por cada fila.
+  var byProvider = {};
+
+  SUMMARY.forEach(function(entry) {
+    byProvider[entry.provider] = entry;
+  });
+
+  body.innerHTML = rows.map(function(item) {
+    var declared = status.latest[item.provider];
+    var entry = byProvider[item.provider];
+    var variability = entry ? entry.variability : null;
+    var lumpy = variability !== null && variability > 0.8;
+
+    return '<tr data-provider="' + esc(item.provider) + '">' +
+      '<td class="name">' +
+        '<button type="button" class="linkish" data-provider="' +
+          esc(item.provider) + '">' + esc(item.provider) + '</button>' +
+      '</td>' +
+      '<td><span class="zone is-' + item.zone + '">' +
+        esc(ZONE_LABEL[item.zone]) + '</span></td>' +
+      cell(fmt(item.plan)) +
+      cell(fmt(item.total)) +
+      cell(item.risk > 0 ? fmt(item.risk) : '—',
+        item.risk > 0 ? 'neg' : 'dim') +
+      cell(fmt(item.pace)) +
+      cell(item.requiredPace === null ? '—' : fmt(item.requiredPace),
+        item.requiredPace === null ? 'dim' : '') +
+      cell(
+        item.realEffort === null
+          ? '—'
+          : (item.effortCapped ? '&gt;4×' : dec(item.realEffort) + '×'),
+        item.zone === 'replace' ? 'neg' : (item.zone === 'push' ? 'warn' : '')
+      ) +
+      cell(variability === null ? '—' : dec(variability),
+        variability === null ? 'dim' : (lumpy ? 'warn' : '')) +
+      '<td>' +
+        (declared
+          ? '<span class="dot dot-' +
+            esc(declared.estatus.toLowerCase()) + '"></span> ' +
+            esc(cap(declared.estatus.toLowerCase()))
+          : '<span class="dim">sin informe</span>') +
+      '</td>' +
+    '</tr>';
+  }).join('');
+
+  each('#forestalBody tr[data-provider]', function(row) {
+    var handle = row.querySelector('.linkish');
+
+    row.addEventListener('click', function() {
+      openDrawer(row.dataset.provider, handle);
+    });
+
+    handle.addEventListener('click', function(event) {
+      event.stopPropagation();
+      openDrawer(row.dataset.provider, handle);
+    });
+  });
+}
+
+function copyForestalTable() {
+  var rows = buildPortfolio(SUMMARY);
+  var status = buildStatusMix(ROWS);
+
+  var head = [
+    'Proveedor', 'Qué hacer', 'Plan mes', 'Recibido', 'MR en riesgo',
+    'Ritmo actual', 'Ritmo exigido', 'Esfuerzo', 'Estatus declarado'
+  ].join('\t');
+
+  var body = rows.map(function(item) {
+    var declared = status.latest[item.provider];
+
+    return [
+      item.provider,
+      ZONE_LABEL[item.zone],
+      dec(item.plan),
+      dec(item.total),
+      dec(item.risk),
+      dec(item.pace),
+      item.requiredPace === null ? '' : dec(item.requiredPace),
+      item.realEffort === null
+        ? ''
+        : (item.effortCapped ? '>4' : dec(item.realEffort)),
+      declared ? declared.estatus : ''
+    ].join('\t');
+  });
+
+  copyText(
+    [head].concat(body).join('\n'),
+    rows.length + ' proveedores copiados'
+  );
+}
 
 function renderDetail() {
   var body = id('detailBody');

@@ -38,8 +38,16 @@ const CONFIG = Object.freeze({
   // 0=domingo ... 6=sábado. Agrega el 6 si trabajan los sábados.
   WORKDAYS: Object.freeze([1, 2, 3, 4, 5]),
 
-  // Feriados adicionales propios de la operación, en 'yyyy-MM-dd'.
+  // Días sin recepción propios de la operación, en 'yyyy-MM-dd': paradas de
+  // planta, cierre de camino, semana de Fiestas Patrias completa. Se
+  // descuentan del prorrateo igual que un feriado legal.
+  // Ejemplo: ['2026-09-17'] para no contar el jueves previo al 18.
   FERIADOS: Object.freeze([]),
+
+  // Días que sí se trabajaron aunque el calendario los excluya (un sábado
+  // de recuperación, un feriado con turno). Manda sobre WORKDAYS y sobre
+  // cualquier feriado.
+  DIAS_HABILES_EXTRA: Object.freeze([]),
 
   // Descuenta los feriados legales de Chile del prorrateo del plan.
   // Ponlo en false para volver al comportamiento anterior (solo lunes a viernes).
@@ -66,27 +74,197 @@ const CONFIG = Object.freeze({
   })
 });
 
+/* =====================================================================
+ * FERIADOS LEGALES DE CHILE
+ *
+ * Se calculan, no se escriben a mano. Una lista fija caduca sin avisar:
+ * al pasar su último año todos los feriados desaparecen y el plan a la
+ * fecha vuelve a salir inflado, que es justo el error que se buscaba
+ * evitar. Aquí cada regla está en el código:
+ *
+ * - Fijos              1-ene, 1-may, 21-may, 16-jul, 15-ago, 18 y 19-sep,
+ *                      1-nov, 8-dic, 25-dic.
+ * - Semana Santa       Viernes y Sábado Santo, a partir de la Pascua.
+ * - Ley 21.357         Pueblos Indígenas, el día del solsticio de junio.
+ * - Ley 19.668         29-jun y 12-oct se corren al lunes si caen martes,
+ *                      miércoles o jueves, y al lunes siguiente si caen
+ *                      viernes.
+ * - Ley 20.299         31-oct se corre al viernes anterior si cae martes y
+ *                      al viernes siguiente si cae miércoles.
+ * - Ley 20.215         feriado puente de Fiestas Patrias: el 17 cuando el
+ *                      18 cae martes y el 20 cuando el 19 cae miércoles.
+ *                      En 2029 esto deja cuatro feriados seguidos.
+ *
+ * Los feriados regionales (Arica, Chillán) no entran: no aplican a esta
+ * operación. Si el gobierno decreta un feriado extraordinario (elecciones,
+ * censo), agrégalo en CONFIG.FERIADOS.
+ * ===================================================================== */
+
 /**
- * Feriados legales de Chile. Incluye los irrenunciables y los movibles ya
- * fijados por ley para cada año. Revisa la lista cada enero.
+ * Domingo de Pascua ('yyyy-MM-dd') por el algoritmo gregoriano anónimo
+ * (Meeus/Jones/Butcher).
  */
-const FERIADOS_CHILE = Object.freeze([
-  // 2025
-  '2025-01-01', '2025-04-18', '2025-04-19', '2025-05-01', '2025-05-21',
-  '2025-06-20', '2025-06-29', '2025-07-16', '2025-08-15', '2025-09-18',
-  '2025-09-19', '2025-10-12', '2025-10-31', '2025-11-01', '2025-12-08',
-  '2025-12-25',
-  // 2026
-  '2026-01-01', '2026-04-03', '2026-04-04', '2026-05-01', '2026-05-21',
-  '2026-06-21', '2026-06-29', '2026-07-16', '2026-08-15', '2026-09-18',
-  '2026-09-19', '2026-10-12', '2026-10-31', '2026-11-01', '2026-12-08',
-  '2026-12-25',
-  // 2027
-  '2027-01-01', '2027-03-26', '2027-03-27', '2027-05-01', '2027-05-21',
-  '2027-06-21', '2027-06-28', '2027-07-16', '2027-08-15', '2027-09-17',
-  '2027-09-18', '2027-10-11', '2027-10-31', '2027-11-01', '2027-12-08',
-  '2027-12-25'
+function pascua_(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+
+  return buildDateKey_(
+    year,
+    Math.floor((h + l - 7 * m + 114) / 31),
+    ((h + l - 7 * m + 114) % 31) + 1
+  );
+}
+
+/* Términos periódicos de Meeus, Astronomical Algorithms, tabla 27.C. */
+const SOLSTICIO_TERMINOS = Object.freeze([
+  [485, 324.96, 1934.136], [203, 337.23, 32964.467], [199, 342.08, 20.186],
+  [182, 27.85, 445267.112], [156, 73.14, 45036.886], [136, 171.52, 22518.443],
+  [77, 222.54, 65928.934], [74, 296.72, 3034.906], [70, 243.58, 9037.513],
+  [58, 119.81, 33718.147], [52, 297.17, 150.678], [50, 21.02, 2281.226],
+  [45, 247.54, 29929.562], [44, 325.15, 31555.956], [29, 60.93, 4443.417],
+  [18, 155.12, 67555.328], [17, 288.79, 4562.452], [16, 198.04, 62894.029],
+  [14, 199.76, 31436.921], [12, 95.39, 14577.848], [12, 287.11, 31931.756],
+  [12, 320.81, 34777.259], [9, 227.73, 1222.114], [8, 15.45, 16859.074]
 ]);
+
+/**
+ * Solsticio de junio en hora de Chile ('yyyy-MM-dd'): el 20 o el 21.
+ * Reproduce las fechas oficiales 2022-2027 (21, 21, 20, 20, 21, 21).
+ * En junio Chile está siempre en horario estándar, UTC-4.
+ */
+function solsticioJunio_(year) {
+  const rad = function(deg) { return deg * Math.PI / 180; };
+  const y = (year - 2000) / 1000;
+
+  const jde0 = 2451716.56767 + 365241.62603 * y + 0.00325 * y * y +
+    0.00888 * Math.pow(y, 3) - 0.00030 * Math.pow(y, 4);
+
+  const t = (jde0 - 2451545) / 36525;
+  const w = rad(35999.373 * t - 2.47);
+  const lambda = 1 + 0.0334 * Math.cos(w) + 0.0007 * Math.cos(2 * w);
+
+  let periodic = 0;
+
+  SOLSTICIO_TERMINOS.forEach(function(term) {
+    periodic += term[0] * Math.cos(rad(term[1] + term[2] * t));
+  });
+
+  // De tiempo dinámico a UT, y de UT a hora de Chile.
+  const years = year - 2000;
+  const deltaT = 62.92 + 0.32217 * years + 0.005589 * years * years;
+  const jd = jde0 + (0.00001 * periodic) / lambda - deltaT / 86400 - 4 / 24;
+
+  return julianDayToDateKey_(jd);
+}
+
+function julianDayToDateKey_(jd) {
+  const z = Math.floor(jd + 0.5);
+  const fraction = jd + 0.5 - z;
+  let a = z;
+
+  if (z >= 2299161) {
+    const alpha = Math.floor((z - 1867216.25) / 36524.25);
+    a = z + 1 + alpha - Math.floor(alpha / 4);
+  }
+
+  const b = a + 1524;
+  const c = Math.floor((b - 122.1) / 365.25);
+  const d = Math.floor(365.25 * c);
+  const e = Math.floor((b - d) / 30.6001);
+
+  const day = Math.floor(b - d - Math.floor(30.6001 * e) + fraction);
+  const month = e < 14 ? e - 1 : e - 13;
+
+  return buildDateKey_(month > 2 ? c - 4716 : c - 4715, month, day);
+}
+
+/**
+ * Ley 19.668: el feriado se corre al lunes de su semana si cae martes,
+ * miércoles o jueves, y al lunes siguiente si cae viernes.
+ */
+function lunesLey19668_(dateKey) {
+  const dayOfWeek = dayOfWeekOfKey_(dateKey);
+
+  if (dayOfWeek >= 2 && dayOfWeek <= 4) {
+    return addDaysToDateKey_(dateKey, 1 - dayOfWeek);
+  }
+
+  if (dayOfWeek === 5) {
+    return addDaysToDateKey_(dateKey, 3);
+  }
+
+  return dateKey;
+}
+
+/**
+ * Ley 20.299: el 31 de octubre se corre al viernes anterior si cae martes
+ * y al viernes siguiente si cae miércoles.
+ */
+function iglesiasLey20299_(year) {
+  const dateKey = buildDateKey_(year, 10, 31);
+  const dayOfWeek = dayOfWeekOfKey_(dateKey);
+
+  if (dayOfWeek === 2) { return addDaysToDateKey_(dateKey, -4); }
+  if (dayOfWeek === 3) { return addDaysToDateKey_(dateKey, 2); }
+
+  return dateKey;
+}
+
+/**
+ * Feriados legales de un año como { 'yyyy-MM-dd': 'Nombre' }.
+ */
+function feriadosChile_(year) {
+  const out = {};
+
+  const put = function(dateKey, name) {
+    if (dateKey) { out[dateKey] = name; }
+  };
+
+  const pascua = pascua_(year);
+
+  put(buildDateKey_(year, 1, 1), 'Año Nuevo');
+  put(addDaysToDateKey_(pascua, -2), 'Viernes Santo');
+  put(addDaysToDateKey_(pascua, -1), 'Sábado Santo');
+  put(buildDateKey_(year, 5, 1), 'Día del Trabajo');
+  put(buildDateKey_(year, 5, 21), 'Glorias Navales');
+  put(solsticioJunio_(year), 'Día Nacional de los Pueblos Indígenas');
+  put(lunesLey19668_(buildDateKey_(year, 6, 29)), 'San Pedro y San Pablo');
+  put(buildDateKey_(year, 7, 16), 'Virgen del Carmen');
+  put(buildDateKey_(year, 8, 15), 'Asunción de la Virgen');
+
+  // Fiestas Patrias y el puente de la Ley 20.215.
+  const sep18 = buildDateKey_(year, 9, 18);
+  const sep19 = buildDateKey_(year, 9, 19);
+
+  if (dayOfWeekOfKey_(sep18) === 2) {
+    put(buildDateKey_(year, 9, 17), 'Fiestas Patrias · puente (Ley 20.215)');
+  }
+
+  put(sep18, 'Independencia Nacional');
+  put(sep19, 'Glorias del Ejército');
+
+  if (dayOfWeekOfKey_(sep19) === 3) {
+    put(buildDateKey_(year, 9, 20), 'Fiestas Patrias · puente (Ley 20.215)');
+  }
+
+  put(lunesLey19668_(buildDateKey_(year, 10, 12)), 'Encuentro de Dos Mundos');
+  put(iglesiasLey20299_(year), 'Día de las Iglesias Evangélicas');
+  put(buildDateKey_(year, 11, 1), 'Día de Todos los Santos');
+  put(buildDateKey_(year, 12, 8), 'Inmaculada Concepción');
+  put(buildDateKey_(year, 12, 25), 'Navidad');
+
+  return out;
+}
 
 const GMAIL_HEADERS = Object.freeze([
   'Fecha Informe',
@@ -334,27 +512,60 @@ function buildWorkdaysInfo_(
     referenceDate = month.startKey;
   }
 
-  const holidays = buildHolidayMap_();
+  const holidays = buildHolidayMap_(month.year);
+  const forced = {};
+
+  CONFIG.DIAS_HABILES_EXTRA.forEach(function(key) {
+    forced[key] = true;
+  });
+
   const lastDay = Number(month.endKey.split('-')[2]);
 
   const workdayKeys = [];
   const weekIndex = {};
+  const calendar = [];
+  const discounted = [];
   let elapsed = 0;
 
   for (let day = 1; day <= lastDay; day++) {
     const key = buildDateKey_(month.year, month.month, day);
+    const dayOfWeek = dayOfWeekOfKey_(key);
 
-    const dayOfWeek = new Date(
-      Date.UTC(month.year, month.month - 1, day)
-    ).getUTCDay();
+    const weekend = CONFIG.WORKDAYS.indexOf(dayOfWeek) === -1;
+    const reason = holidays[key] || '';
 
-    if (CONFIG.WORKDAYS.indexOf(dayOfWeek) === -1) {
-      continue;
+    // Un día forzado se cuenta aunque sea sábado o feriado.
+    const isWorkday = forced[key] || (!weekend && !reason);
+
+    let kind = 'workday';
+
+    if (!isWorkday) {
+      kind = reason ? 'holiday' : 'weekend';
+    } else if (forced[key] && (weekend || reason)) {
+      kind = 'recovered';
     }
 
-    if (holidays[key]) {
-      continue;
+    const entry = {
+      key: key,
+      day: day,
+      dayOfWeek: dayOfWeek,
+      kind: kind,
+      reason: forced[key] && (weekend || reason)
+        ? 'Día trabajado (recuperación)'
+        : reason,
+      elapsed: isWorkday && key <= referenceDate,
+      isReference: key === referenceDate
+    };
+
+    calendar.push(entry);
+
+    // Solo cuenta como feriado descontado el día que, de no existir el
+    // motivo, habría sido hábil: un feriado en domingo no quita nada.
+    if (!isWorkday && reason && !weekend) {
+      discounted.push({ key: key, reason: reason });
     }
+
+    if (!isWorkday) { continue; }
 
     workdayKeys.push(key);
 
@@ -378,26 +589,45 @@ function buildWorkdaysInfo_(
     fraction: total ? round_(elapsed / total, 6) : 0,
     workdayKeys: workdayKeys,
     workdaysByWeek: weekIndex,
-    holidays: Object.keys(holidays).filter(function(key) {
-      return key.indexOf(month.prefix + '-') === 0;
-    }).sort()
+    calendar: calendar,
+    discounted: discounted,
+    holidays: discounted.map(function(item) { return item.key; })
   };
 }
 
-function buildHolidayMap_() {
+/**
+ * Días no hábiles de un año como { 'yyyy-MM-dd': 'Motivo' }: los feriados
+ * legales más las paradas propias de la operación.
+ */
+function buildHolidayMap_(year) {
   const holidays = {};
 
   if (CONFIG.USAR_FERIADOS_CHILE) {
-    FERIADOS_CHILE.forEach(function(key) {
-      holidays[key] = true;
+    const legal = feriadosChile_(year);
+
+    Object.keys(legal).forEach(function(key) {
+      holidays[key] = legal[key];
     });
   }
 
+  // Las paradas de la operación pisan al feriado legal: si coinciden, el
+  // motivo que interesa al comprador es el de la operación.
   CONFIG.FERIADOS.forEach(function(key) {
-    holidays[key] = true;
+    holidays[key] = 'Parada de la operación';
   });
 
+  // DIAS_HABILES_EXTRA no se aplica aquí: lo resuelve buildWorkdaysInfo_,
+  // que necesita saber el motivo original para marcar el día como
+  // recuperado en vez de como un día hábil cualquiera.
   return holidays;
+}
+
+function dayOfWeekOfKey_(dateKey) {
+  const parts = String(dateKey || '').split('-');
+
+  return new Date(Date.UTC(
+    Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])
+  )).getUTCDay();
 }
 
 /**
@@ -1541,6 +1771,7 @@ function readGmailProviderRows_(spreadsheet, timezone, month, planCandidates) {
           descripcion: 'CUMPLIMIENTO × ' + CONFIG.FACTOR_CUMPLIMIENTO,
           cantidad: 0,
           cumplimiento: 0,
+          programaMr: null,
           factor: CONFIG.FACTOR_CUMPLIMIENTO,
           um: 'MR',
           predio: '',
@@ -1552,6 +1783,14 @@ function readGmailProviderRows_(spreadsheet, timezone, month, planCandidates) {
 
       aggregate[key].cantidad += item.cantidad;
       aggregate[key].cumplimiento += item.cumplimiento;
+
+      // El programa comprometido del informe: sirve para ver si el
+      // proveedor cumple lo que él mismo programó, no solo el plan.
+      if (item.programaMr !== null && isFinite(item.programaMr)) {
+        aggregate[key].programaMr =
+          (aggregate[key].programaMr || 0) + Number(item.programaMr);
+      }
+
       aggregate[key].rol = joinUnique_(aggregate[key].rol, item.rol);
       aggregate[key].estatus = joinUnique_(aggregate[key].estatus, item.estatus);
     });
@@ -2095,7 +2334,13 @@ function diagnosticarCruceProveedores() {
     'Mes: ' + data.month.label,
     'Días hábiles: ' + data.workdays.elapsed + ' de ' + data.workdays.total +
       ' (al ' + data.workdays.referenceDateLabel + ')',
-    'Feriados descontados: ' + (data.workdays.holidays.length || 'ninguno'),
+    'Feriados descontados: ' + (
+      (data.workdays.discounted || []).length
+        ? data.workdays.discounted.map(function(item) {
+            return formatDateKey_(item.key) + ' (' + item.reason + ')';
+          }).join(', ')
+        : 'ninguno'
+    ),
     'Proveedores en Plan: ' + data.source.planProviders,
     'Filas reales: ' + data.source.actualRows,
     'Filas complemento Gmail: ' + data.source.supplementRows,

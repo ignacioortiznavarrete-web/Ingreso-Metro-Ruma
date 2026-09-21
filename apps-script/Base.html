@@ -212,6 +212,7 @@ function bindEvents() {
   });
 
   id('btnDetailCopy').addEventListener('click', copyDetailTable);
+  id('btnForestalCopy').addEventListener('click', copyForestalTable);
 
   each('#detailTable th.sortable', function(th) {
     th.addEventListener('click', function() {
@@ -257,7 +258,10 @@ function bindEvents() {
       return;
     }
 
-    var views = { 1: 'panorama', 2: 'proveedores', 3: 'semana', 4: 'detalle' };
+    var views = {
+      1: 'panorama', 2: 'proveedores', 3: 'forestal',
+      4: 'semana', 5: 'detalle'
+    };
 
     if (views[event.key]) {
       event.preventDefault();
@@ -296,6 +300,7 @@ function switchView(view) {
   var names = {
     panorama: 'Panorama del mes',
     proveedores: 'Cruce por proveedor',
+    forestal: 'Origen del suministro',
     semana: 'Apuntes de la semana',
     detalle: 'Auditoría del dato'
   };

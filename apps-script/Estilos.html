@@ -84,7 +84,7 @@
   --gap: 14px;
   --radius: 10px;
   --radius-sm: 6px;
-  --rail: 82px;
+  --rail: 96px;
 
   /* Elevación: sombras teñidas al fondo, nunca junto a borde grueso */
   --lift-1: 0 1px 2px rgba(24, 39, 66, .05);
@@ -156,6 +156,11 @@ h1, h2, h3, p { margin: 0; }
   min-height: 100vh;
 }
 
+/* Las casillas de la reja no se dejan empujar por su contenido: lo que
+   no cabe rueda dentro de su propio marco (tabla, mapa semanal, riel)
+   en vez de arrastrar la página entera. */
+.shell > * { min-width: 0; }
+
 /* --- Riel de navegación --- */
 
 .rail {
@@ -199,6 +204,10 @@ h1, h2, h3, p { margin: 0; }
   padding: 9px 2px 7px;
   overflow: hidden;
   font-size: 9.5px;
+  /* La etiqueta va en su propio span para poder recortarla: el ancho de
+     la reja no puede depender de que Archivo ya haya cargado. Mientras
+     no está, el respaldo del sistema ignora font-stretch y "Proveedores"
+     se sale del riel. */
   font-weight: 600;
   font-stretch: 66%;
   letter-spacing: .02em;
@@ -217,6 +226,12 @@ h1, h2, h3, p { margin: 0; }
 .rail-tab:hover { color: #fff; background: rgba(255, 255, 255, .07); }
 .rail-tab[aria-selected="true"] { color: #fff; background: rgba(255, 255, 255, .13); }
 .rail-tab svg { width: 19px; height: 19px; }
+
+.rail-tab-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .rail-tab-badge {
   position: absolute;
@@ -481,6 +496,10 @@ h1, h2, h3, p { margin: 0; }
  * ===================================================================== */
 
 .panel {
+  /* Sin esto, una barra de controles ancha empuja el panel por sobre su
+     columna de la reja y la tabla se sale de la página en vez de rodar
+     dentro de su propio marco. */
+  min-width: 0;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -491,6 +510,7 @@ h1, h2, h3, p { margin: 0; }
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 13px 16px 11px;
 }
@@ -512,7 +532,7 @@ h1, h2, h3, p { margin: 0; }
   text-wrap: pretty;
 }
 
-.panel-tools { display: flex; flex: none; gap: 6px; }
+.panel-tools { display: flex; flex: none; flex-wrap: wrap; gap: 6px; }
 
 .panel-body { padding: 0 16px 15px; }
 .panel-body-flush { padding: 0; }
@@ -522,9 +542,16 @@ h1, h2, h3, p { margin: 0; }
   grid-template-columns: minmax(0, 1.72fr) minmax(300px, 1fr);
   align-items: start;
 }
-.grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
 .grid-lead {
   grid-template-columns: minmax(0, 1fr) minmax(300px, .62fr);
+  align-items: start;
+}
+.grid-cal {
+  grid-template-columns: minmax(300px, .52fr) minmax(0, 1fr);
   align-items: start;
 }
 
@@ -590,7 +617,7 @@ h1, h2, h3, p { margin: 0; }
   grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
   gap: 1px;
   margin-top: 16px;
-  background: var(--line);
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -599,6 +626,7 @@ h1, h2, h3, p { margin: 0; }
 .readout {
   padding: 9px 12px 10px;
   background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line);
 }
 
 .readout-key {
@@ -649,7 +677,11 @@ h1, h2, h3, p { margin: 0; }
   grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: 1px;
   margin-bottom: var(--gap);
-  background: var(--line);
+  /* El fondo es blanco y el filete lo pone cada celda con su propio anillo
+     de 1px: así, cuando la última fila queda incompleta, el hueco sigue
+     siendo papel y no un bloque gris. El número de columnas lo decide
+     auto-fit, así que no se puede rellenar con una celda fantasma. */
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
@@ -661,6 +693,9 @@ h1, h2, h3, p { margin: 0; }
   gap: 2px;
   padding: 11px 13px 12px;
   background: var(--panel);
+  /* Los anillos de dos celdas vecinas comparten el hueco de 1px y se leen
+     como un solo filete. */
+  box-shadow: 0 0 0 1px var(--line);
   transition: background-color .18s var(--out-quart);
 }
 
@@ -966,6 +1001,18 @@ h1, h2, h3, p { margin: 0; }
 
 .attack { display: grid; }
 
+/* En la fila de arriba la ruma es la pieza que manda: si la lista de
+   ataque crece libre, deja un hueco blanco de media pantalla al lado de
+   la ruma. Se acota a la altura de la ruma y el resto rueda dentro de la
+   propia lista, que además es el orden en que se llama: de arriba abajo. */
+@media (min-width: 1241px) {
+  .grid-hero .attack {
+    max-height: 372px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
 .attack-item {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1146,7 +1193,12 @@ h1, h2, h3, p { margin: 0; }
 }
 
 .week-bar .field { min-width: 175px; }
-.week-bar-actions { display: flex; gap: 7px; margin-left: auto; }
+.week-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-left: auto;
+}
 
 .notes { display: grid; gap: 10px; }
 
@@ -1404,6 +1456,200 @@ h1, h2, h3, p { margin: 0; }
 .veil-caption b { font-weight: 600; color: var(--ink-2); }
 
 /* =====================================================================
+ * CALENDARIO DE DÍAS HÁBILES
+ * El prorrateo del plan se apoya entero en este conteo, así que se
+ * dibuja. Un día hábil transcurrido es tinta sólida; uno por venir, el
+ * contorno; un feriado o una parada quedan hundidos y tachados. Es una
+ * hoja de control, no un date picker.
+ * ===================================================================== */
+
+.calendar { padding-top: 2px; }
+
+.cal-head,
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.cal-head { margin-bottom: 5px; }
+
+.cal-dow {
+  font-size: 9px;
+  font-weight: 700;
+  font-stretch: 78%;
+  letter-spacing: .08em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.cal-dow.is-off { color: var(--line-2); }
+
+.cal-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.cal-cell.is-pad { border-color: transparent; background: none; }
+
+.cal-day {
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink-2);
+}
+
+/* Hábil transcurrido: ya entró en el plan a la fecha. */
+.cal-cell.is-elapsed {
+  border-color: var(--brand);
+  background: var(--brand);
+}
+
+.cal-cell.is-elapsed .cal-day { color: #fff; }
+
+/* Fin de semana: no cuenta y no exige lectura. */
+.cal-cell.is-weekend {
+  border-color: transparent;
+  background: var(--panel-sunk);
+}
+
+.cal-cell.is-weekend .cal-day { color: var(--ink-3); }
+
+/* Feriado o parada: no cuenta, pero hay que poder verlo. */
+.cal-cell.is-holiday {
+  border-color: var(--hiviz-wash);
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--hiviz-wash) 0 3px,
+      #fff 3px 6px
+    );
+}
+
+.cal-cell.is-holiday .cal-day {
+  color: var(--hiviz-ink);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* Día recuperado: se trabajó aunque el calendario lo excluyera. */
+.cal-cell.is-recovered {
+  border-color: var(--brand-2);
+  border-style: dashed;
+  background: var(--brand-wash);
+}
+
+.cal-cell.is-recovered .cal-day { color: var(--brand); }
+
+.cal-mark {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--brand-2);
+}
+
+/* La fecha de corte lleva el filete de alta visibilidad. */
+.cal-cell.is-cut::after {
+  position: absolute;
+  inset: -3px;
+  content: "";
+  border: 2px solid var(--hiviz);
+  border-radius: 8px;
+}
+
+.cal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 13px;
+  margin-top: 11px;
+}
+
+.key-swatch-cal { background: var(--brand); }
+
+.key-swatch-calnext {
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.key-swatch-calhol {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--hiviz-wash) 0 2px,
+      #fff 2px 4px
+    );
+  border: 1px solid var(--hiviz-wash);
+}
+
+.key-swatch-calweek { background: var(--panel-sunk); }
+
+.cal-list {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  list-style: none;
+  font-size: 10.5px;
+  line-height: 1.7;
+  color: var(--ink-2);
+  background: var(--panel-sunk);
+  border-radius: var(--radius-sm);
+}
+
+.cal-list b {
+  display: inline-block;
+  min-width: 78px;
+  font-weight: 600;
+  color: var(--hiviz-ink);
+}
+
+.cal-none {
+  margin: 10px 0 0;
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+/* =====================================================================
+ * ZONA DE ACCIÓN
+ * Qué hacer con el proveedor, no cómo va. Va en la tabla forestal.
+ * ===================================================================== */
+
+.zone {
+  display: inline-flex;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-stretch: 84%;
+  letter-spacing: .03em;
+  white-space: nowrap;
+  border-radius: 3px;
+}
+
+.zone.is-safe { color: #1c3358; background: var(--brand-wash); }
+.zone.is-nudge { color: var(--ink-2); background: var(--panel-sunk); }
+.zone.is-push { color: var(--hiviz-ink); background: var(--hiviz-wash); }
+.zone.is-replace { color: #8a1c14; background: #fdeceb; }
+
+/* Gráficos cuya altura la fija el contenido, no el recuadro. */
+.chart-auto { min-height: 60px; }
+
+.chart-value {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+
+/* =====================================================================
  * ENTRADA ESCALONADA
  * Los estratos suben como se apila una ruma. El estado final es el
  * estado por defecto: si la animación no corre, todo queda visible.
@@ -1456,12 +1702,45 @@ h1, h2, h3, p { margin: 0; }
 .bar-x { animation: bar-x .46s var(--out-quint) both; }
 @keyframes bar-x { from { transform: scaleX(0); } }
 
+/* Barra horizontal: crece desde su borde izquierdo, como la ruma. */
+.bar-wide {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: bar-x .5s var(--out-quint) both;
+}
+
+/* Burbuja de la matriz: aparece en su sitio, sin rebote ni recorrido. */
+.blip { animation: blip-in .42s var(--out-quart) both; }
+
+@keyframes blip-in {
+  from { opacity: 0; transform: scale(.55); }
+}
+
+.blip { transform-box: fill-box; transform-origin: center; }
+
+/* Casilla del calendario: el mes se llena de izquierda a derecha. */
+.cal-pop { animation: cal-pop .3s var(--out-quart) both; }
+
+@keyframes cal-pop {
+  from { opacity: 0; transform: scale(.9); }
+}
+
+.cal-pop { animation-delay: calc(var(--i, 0) * 11ms); }
+
+/* La superficie de mediciones entra celda por celda. */
+.gauge { animation: gauge-in .34s var(--out-quart) both; }
+
+@keyframes gauge-in { from { opacity: 0; } }
+
+.gauge { animation-delay: calc(var(--i, 0) * 26ms); }
+
 /* =====================================================================
  * ADAPTACIÓN
  * ===================================================================== */
 
 @media (max-width: 1240px) {
-  .grid-hero, .grid-lead, .grid-2 { grid-template-columns: minmax(0, 1fr); }
+  .grid-hero, .grid-lead, .grid-2,
+  .grid-cal { grid-template-columns: minmax(0, 1fr); }
   .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .filters-actions { grid-column: 1 / -1; }
 }
@@ -1489,6 +1768,16 @@ h1, h2, h3, p { margin: 0; }
   .main { padding: 12px 14px 44px; }
   .filters { grid-template-columns: minmax(0, 1fr); }
 
+  /* Los controles del panel pasan a su propia fila y se reparten: la
+     tabla vuelve a rodar dentro de su marco. */
+  .panel-tools {
+    flex: 1 1 100%;
+    min-width: 0;
+    margin-top: 2px;
+  }
+
+  .panel-tools .select { width: 100% !important; }
+
   .filterbox-summary {
     display: flex;
     align-items: center;
@@ -1513,6 +1802,10 @@ h1, h2, h3, p { margin: 0; }
   .bone-row { grid-template-columns: repeat(2, 1fr); }
   .note-figures { width: 100%; margin-left: 0; }
   .week-bar-actions { width: 100%; margin-left: 0; }
+
+  /* Cinco botones no caben en una fila de teléfono: se reparten en dos
+     y cada uno queda con área de toque completa. */
+  .week-bar-actions .btn { flex: 1 1 auto; justify-content: center; }
   .drawer { width: 100%; }
 }
 

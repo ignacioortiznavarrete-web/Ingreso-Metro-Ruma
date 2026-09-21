@@ -12,17 +12,17 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 
 | Archivo | Qué es | Líneas |
 |---|---|---|
-| `apps-script/Codigo.gs` | Backend: lee `Plan`, `Ingresos` e `Informegmail`, importa los correos y guarda los apuntes. | ~2.450 |
-| `apps-script/Index.html` | Estructura del tablero. Une los demás con `include()`. | ~570 |
-| `apps-script/Estilos.html` | Sistema visual: tokens, componentes, movimiento e impresión. | ~1.500 |
-| `apps-script/Base.html` | Estado compartido, navegación, carga, preferencias y formato. | ~600 |
-| `apps-script/Analisis.html` | Todas las métricas: proveedor, día y semana. | ~400 |
-| `apps-script/Graficos.html` | Motor SVG propio: ruma, curva, diario, desvío, Pareto, sparkline. | ~1.030 |
-| `apps-script/Tablero.html` | Panorama, proveedores, detalle y la ficha lateral. | ~850 |
-| `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~900 |
+| `apps-script/Codigo.gs` | Backend: calendario de días hábiles, lee `Plan`, `Ingresos` e `Informegmail`, importa los correos y guarda los apuntes. | ~2.690 |
+| `apps-script/Index.html` | Estructura del tablero. Une los demás con `include()`. | ~750 |
+| `apps-script/Estilos.html` | Sistema visual: tokens, componentes, movimiento e impresión. | ~1.890 |
+| `apps-script/Base.html` | Estado compartido, navegación, carga, preferencias y formato. | ~700 |
+| `apps-script/Analisis.html` | Todas las métricas: proveedor, día, semana y origen del suministro. | ~805 |
+| `apps-script/Graficos.html` | Motor SVG propio: ruma, calendario, curva, diario, desvío, Pareto, mix, frentes, semáforo, matriz y sparkline. | ~1.720 |
+| `apps-script/Tablero.html` | Panorama, proveedores, forestal, detalle y la ficha lateral. | ~1.230 |
+| `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 36 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/pruebas.mjs` | 62 comprobaciones de interacción sobre la copia autónoma. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -48,11 +48,16 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/pruebas.mjs        # 36 comprobaciones de interacción sobre Chromium
-node preview/shot.mjs           # captura las cuatro vistas, la impresión y el móvil
+node preview/pruebas.mjs        # 62 comprobaciones de interacción sobre Chromium
+node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
 
 Las pruebas y las capturas necesitan Playwright (`npm i playwright`).
+`node preview/pruebas.mjs` arma su propia copia con fecha fija (25/09/2026),
+así que no depende de cuándo se corrió `build.mjs`. Se eligió septiembre a
+propósito: es el mes con feriado en día hábil. Si la versión de Playwright no
+coincide con el Chromium instalado, `CHROME_PATH=/ruta/a/chrome` fuerza el
+binario.
 
 Abre `preview/out/index.html` en el navegador. Trae un `google.script.run`
 simulado, así que se puede navegar, generar apuntes y guardarlos en memoria
@@ -62,7 +67,7 @@ sin tocar la planilla.
 
 | Tecla | Qué hace |
 |---|---|
-| `1` `2` `3` `4` | Cambia de vista |
+| `1` `2` `3` `4` `5` | Cambia de vista |
 | `/` | Abre los filtros y va a la búsqueda |
 | `Esc` | Cierra la ficha del proveedor |
 
@@ -70,15 +75,22 @@ Los atajos no se disparan mientras se escribe un apunte.
 
 ---
 
-## Las cuatro vistas
+## Las cinco vistas
 
 **Panorama.** La ruma del mes (el plan como regla graduada, el avance apilado
 por día hábil, la proyección en silueta), el tablero de mediciones, la lista
-de ataque, la curva de avance y la recepción diaria.
+de ataque, **el calendario de días hábiles**, la curva de avance y la
+recepción diaria.
 
 **Proveedores.** Desvío contra el plan a la fecha, concentración de la brecha
 (Pareto) y el cruce mensual completo. Al hacer clic en una fila se abre la
 ficha del proveedor con su historia semanal y sus últimos apuntes.
+
+**Forestal.** De dónde viene el metro ruma y qué tan frágil es esa fuente:
+la matriz riesgo/esfuerzo, el semáforo que el proveedor se pone en su propio
+informe, el mix por producto, los frentes de cosecha y la tabla de decisión de
+compra. Está aparte del panorama porque responde otra pregunta: el panorama
+dice *cuánto falta*, forestal dice *a quién llamar y por qué*.
 
 **Semana.** El mapa de cumplimiento por proveedor y semana, y la bitácora: al
 entrar, el tablero ya trae redactado un diagnóstico y un plan de acción por
@@ -124,6 +136,38 @@ Además del cruce plan/real que ya existía:
   el color de su cumplimiento, para separar al que falla siempre del que falló
   una vez.
 
+### Análisis forestal: de dónde viene el metro ruma
+
+El cruce plan/real dice si llega el volumen. Esto dice de dónde llega y qué tan
+frágil es, que es lo que decide una compra. Sale todo de columnas que la
+planilla ya traía y nadie estaba mirando: `Material`, `Descripción`, `Predio`,
+`Rol` y el `Estatus` del informe.
+
+- **Matriz riesgo / esfuerzo.** Cada proveedor en dos ejes: los MR que se
+  pierden si nada cambia, y cuántas veces su ritmo actual habría que exigir
+  para cerrar. El tamaño es su plan del mes. Separa las cuatro decisiones
+  reales: cierra solo, con un llamado llega, hay que empujar el programa, o no
+  llega y ese volumen se busca en otra parte.
+- **Semáforo declarado.** El estatus que el proveedor se pone en su propio
+  informe diario. Es un indicador adelantado: se declara en rojo antes de que
+  deje de llegar el camión.
+- **Mix por producto.** Qué se está comprando, no solo cuánto. Una sola línea
+  concentrando el mes es un riesgo de precio y de destino.
+- **Frentes de cosecha.** Predios que movieron material. Cada predio es un
+  frente: si bajan los frentes activos, el mes se cae aunque el volumen
+  todavía no lo muestre. Un frente se marca detenido cuando lleva más del
+  **doble de su propia cadencia** sin entregar, no a los tres días fijos: un
+  predio que entrega cada cuatro días no está detenido al cuarto, y con el
+  umbral fijo salían casi todos en naranja y el dato no decía nada.
+- **Autonomía del mes.** Los días hábiles que quedan divididos por los que
+  tomaría cerrar la brecha al ritmo actual. Bajo 1× el mes no cierra sin
+  cambiar algo.
+- **Concentración.** Cuántos nombres hacen el 80% del suministro, más el
+  Herfindahl normalizado para comparar un mes con otro.
+- **Sin desglose.** Qué parte del volumen llega por el informe diario, que no
+  trae material ni predio. Es la ceguera del mes, y conviene tenerla a la
+  vista: el mix y los frentes solo pueden desglosar lo que viene de `Ingresos`.
+
 ## Bitácora semanal (hoja `Apuntes`)
 
 Se crea sola la primera vez que guardas. Una fila por apunte:
@@ -146,15 +190,77 @@ castiga por los días que le faltan):
 Los borradores son eso: un punto de partida con los números ya calculados. El
 comprador los corrige antes de guardar.
 
+## Días hábiles: por qué septiembre salía mal
+
+Todo el tablero cuelga de un número: cuántos días hábiles tiene el mes y
+cuántos van corridos. El "plan a la fecha", el desvío, la proyección y la
+clasificación de la bitácora son todos ese número multiplicado por algo. Si
+sobra un día, el plan a la fecha sale inflado y el mes parece peor de lo que
+está.
+
+Septiembre es el mes donde eso duele: el 18 y el 19 son feriados y caen en
+distinto día de la semana cada año.
+
+**Los feriados ahora se calculan, no se escriben a mano.** Había una lista fija
+que llegaba hasta 2027 y traía dos errores (el 17 de septiembre de 2027 como
+feriado, que no lo es, y el 19 de septiembre de 2027 ausente). Peor que los
+errores: al pasar 2027 la lista se vacía sin avisar y el 18 de septiembre
+vuelve a contar como día hábil, que es exactamente el problema que la lista
+venía a resolver. Ahora cada regla está en el código:
+
+| Regla | Qué hace |
+|---|---|
+| Fijos | 1-ene, 1-may, 21-may, 16-jul, 15-ago, 18 y 19-sep, 1-nov, 8-dic, 25-dic |
+| Semana Santa | Viernes y Sábado Santo, desde la Pascua (algoritmo gregoriano) |
+| Ley 21.357 | Pueblos Indígenas, el día del solsticio de junio en hora de Chile |
+| Ley 19.668 | 29-jun y 12-oct se corren al lunes si caen martes, miércoles o jueves; al lunes siguiente si caen viernes |
+| Ley 20.299 | 31-oct se corre al viernes anterior si cae martes; al siguiente si cae miércoles |
+| **Ley 20.215** | **Feriado puente de Fiestas Patrias: el 17 cuando el 18 cae martes, y el 20 cuando el 19 cae miércoles** |
+
+El puente de la Ley 20.215 no estaba contemplado de ninguna forma. En **2029**
+se juntan los cuatro: 17, 18, 19 y 20 de septiembre. Ese mes tiene **16 días
+hábiles, no 20**; con la lista anterior el plan a la fecha habría salido un 25%
+inflado todo el mes.
+
+Septiembre queda así:
+
+| Año | Días hábiles | Descontados |
+|---|---|---|
+| 2025 | 20 | 18 (jueves) y 19 (viernes) |
+| 2026 | 21 | 18 (viernes); el 19 cae sábado y no descuenta nada |
+| 2027 | 22 | ninguno: el 18 cae sábado y el 19 domingo |
+| 2029 | 16 | 17, 18, 19 y 20, con el puente de la Ley 20.215 |
+
+Un feriado que cae sábado o domingo ya no se cuenta como "descontado": no
+quitaba ningún día hábil y solo confundía el mensaje del tablero.
+
+**Dos ajustes para la operación real**, porque el calendario legal no es el
+calendario de la faena:
+
+- `CONFIG.FERIADOS` — días sin recepción propios: parada de planta, cierre de
+  camino, la semana de Fiestas Patrias completa. Se descuentan igual que un
+  feriado legal. Ejemplo: `['2026-09-17']` para no contar el jueves previo al 18.
+- `CONFIG.DIAS_HABILES_EXTRA` — días que sí se trabajaron aunque el calendario
+  los excluya: un sábado de recuperación, un feriado con turno. Manda sobre
+  todo lo demás y el calendario los marca como *recuperados*.
+
+**El conteo se puede revisar sin abrir el código.** La vista Panorama trae el
+calendario del mes: cada día con su motivo, el feriado tachado con su nombre,
+el día recuperado marcado y un recuadro en la fecha de corte. Es la forma de
+comprobar el prorrateo de un vistazo en vez de confiar en él.
+
+`CONFIG.USAR_FERIADOS_CHILE` sigue existiendo: en `false` vuelve a contar solo
+lunes a viernes.
+
 ## Cambios en el backend
 
-- **Feriados de Chile.** `CONFIG.USAR_FERIADOS_CHILE` viene en `true` y
-  descuenta los feriados legales del prorrateo (lista `FERIADOS_CHILE`, hasta
-  2027). Antes solo se excluían sábados y domingos, así que el 18 de
-  septiembre contaba como día hábil y el plan a la fecha salía inflado.
-  **Esto cambia el "plan a la fecha" respecto de la versión anterior**; para
-  volver al comportamiento previo, ponlo en `false`.
 - `getDashboardData(monthPrefix)` acepta un mes y devuelve `availableMonths`.
+- `workdays` trae ahora `calendar` (un registro por día del mes con su tipo y
+  motivo) y `discounted` (los feriados que sí quitaron un día hábil, con su
+  nombre).
+- Las filas del complemento Gmail arrastran `programaMr`: el programa que el
+  proveedor comprometió en su informe, para poder medirlo contra lo que
+  entregó y no solo contra el plan.
 - Corregido: `parseOptionalNumber_` devolvía `null` para celdas vacías y
   `isFinite(null)` es `true`, así que las filas de Gmail sin CUMPLIMIENTO
   entraban como cero en vez de descartarse.
@@ -212,10 +318,49 @@ Charts. Solo quedan las dos familias tipográficas de Google Fonts.
 - Un error del servidor muestra la causa probable y un botón de reintento, en
   vez de un mensaje crudo.
 
+### Arreglos de esta tanda
+
+- **El color de los rótulos de los gráficos se perdía.** Iba en el atributo
+  `fill` del `<text>`, y cualquier regla CSS —`.chart-label`, `.chart-value`—
+  le gana a un atributo de presentación. Ocho rótulos salían en gris en vez de
+  su color (el "80% de la brecha", las banderas de la ruma, los ejes del
+  desvío). Ahora el color viaja por `fillStyle` en `attr()`, que lo emite como
+  estilo en línea.
+- **Los tramos del semáforo eligen su tinta por contraste medido**
+  (`inkOn()`), no a ojo: blanco o tinta oscura, la que dé más razón de
+  contraste. Los tres tramos quedan sobre 4,5:1.
+- **La leyenda se reparte midiendo el texto ya pintado**, no estimando a 5,4 px
+  por carácter. La estimación se pisaba mientras Archivo no había cargado —el
+  respaldo del sistema ignora `font-stretch`— y las entradas quedaban una
+  encima de otra. Si no caben en el ancho, bajan a una segunda fila y el SVG
+  crece.
+- **Sin desbordamiento horizontal a 390 px.** Faltaba `min-width: 0` en las
+  casillas de la reja, así que una barra de controles ancha empujaba la página
+  entera en vez de dejar rodar la tabla en su marco. Los controles del panel y
+  los cinco botones de la bitácora ahora se reparten en dos filas.
+- **La última fila incompleta de las mediciones ya no es un bloque gris.** El
+  filete de 1px lo pone cada celda con su propio anillo, así el hueco sigue
+  siendo papel; `auto-fit` decide las columnas, así que no se puede rellenar
+  con una celda fantasma.
+- **La etiqueta del riel se recorta con puntos suspensivos** en vez de cortarse
+  a media letra: el ancho del riel no puede depender de que la tipografía ya
+  haya cargado.
+- **Las etiquetas de la matriz no se pisan**: se colocan al lado que tiene
+  sitio y se omiten si chocarían con una ya puesta.
+
 ## Verificación
 
-`preview/` incluye una suite de 36 comprobaciones de interacción sobre
+`preview/` incluye una suite de 62 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
-guardar, informe semanal y memoria entre sesiones. También se comprueba que no
-haya desbordamiento horizontal en 1600 px ni en 390 px.
+guardar, informe semanal y memoria entre sesiones.
+
+Sobre los días hábiles se comprueba el caso concreto: que septiembre de 2026
+dé **21** días hábiles, que el feriado descontado sea el 18 con su nombre, que
+el calendario pinte una casilla por día y que la suma de días hábiles del
+calendario cuadre con el total que usa el prorrateo. Sobre la vista forestal,
+que el mix cuadre exactamente con lo que vino de `Ingresos` y que las
+participaciones sumen 100%.
+
+También se comprueba que no haya desbordamiento horizontal en 1600 px, 1280 px
+ni 390 px, recorriendo las cinco vistas en cada ancho.

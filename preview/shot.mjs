@@ -8,7 +8,14 @@ const url = 'file://' + join(out, 'index.html');
 const errors = [];
 
 const proxy = process.env.HTTPS_PROXY || process.env.https_proxy;
-const browser = await chromium.launch(proxy ? { proxy: { server: proxy } } : {});
+
+// CHROME_PATH permite usar un Chromium ya instalado en el sistema cuando la
+// version de Playwright no coincide con la descargada.
+const launch = {};
+if (proxy) { launch.proxy = { server: proxy }; }
+if (process.env.CHROME_PATH) { launch.executablePath = process.env.CHROME_PATH; }
+
+const browser = await chromium.launch(launch);
 const ctx = await browser.newContext({
   viewport: { width: 1600, height: 1100 },
   ignoreHTTPSErrors: true
@@ -26,6 +33,7 @@ await page.waitForTimeout(1400);
 const shots = [
   ['panorama', null],
   ['proveedores', '#tab-proveedores'],
+  ['forestal', '#tab-forestal'],
   ['semana', '#tab-semana'],
   ['detalle', '#tab-detalle']
 ];

@@ -14,7 +14,8 @@ function workdays() {
   return (DATA && DATA.workdays) || {
     total: 0, elapsed: 0, remaining: 0, fraction: 0,
     referenceDate: '', referenceDateLabel: '—',
-    workdayKeys: [], workdaysByWeek: {}, holidays: []
+    workdayKeys: [], workdaysByWeek: {},
+    calendar: [], discounted: [], holidays: []
   };
 }
 
@@ -373,6 +374,404 @@ function buildWeeks(rows, summary) {
       lines: lines
     };
   }).filter(function(item) { return item.daysElapsed > 0; });
+}
+
+/* =====================================================================
+ * ANÁLISIS FORESTAL
+ *
+ * El cruce plan/real dice si llega el volumen. Estas métricas dicen de
+ * dónde llega y qué tan frágil es: qué producto, qué predio, qué declaró
+ * el proveedor en su informe y cuánto habría que empujarlo.
+ *
+ * Ojo con la procedencia: las filas de complemento Gmail no traen
+ * producto ni predio (el informe diario no los detalla), así que el mix
+ * se arma solo con Ingresos y el complemento se muestra aparte para que
+ * los totales cuadren.
+ * ===================================================================== */
+
+/**
+ * Mix por producto. Agrupa por descripción de material, que es lo que
+ * lee un comprador ("ROLLIZO PULPABLE PINO"), y cae al código solo si la
+ * descripción viene vacía.
+ */
+function buildProductMix(rows) {
+  var buckets = {};
+  var complement = 0;
+
+  rows.forEach(function(row) {
+    var amount = Number(row.cantidad) || 0;
+
+    if (row.source === 'GMAIL') {
+      complement += amount;
+      return;
+    }
+
+    var label = row.descripcion || row.material || 'Sin clasificar';
+    var bucket = buckets[label];
+
+    if (!bucket) {
+      bucket = buckets[label] = {
+        label: label,
+        material: row.material || '',
+        total: 0,
+        providers: {},
+        predios: {}
+      };
+    }
+
+    bucket.total += amount;
+    bucket.providers[row.provider] = true;
+
+    if (row.predio) { bucket.predios[row.predio] = true; }
+  });
+
+  var list = Object.keys(buckets).map(function(key) {
+    var bucket = buckets[key];
+
+    return {
+      label: bucket.label,
+      material: bucket.material,
+      total: bucket.total,
+      providers: Object.keys(bucket.providers).length,
+      predios: Object.keys(bucket.predios).length
+    };
+  });
+
+  var declared = list.reduce(function(total, item) {
+    return total + item.total;
+  }, 0);
+
+  list.sort(function(a, b) { return b.total - a.total; });
+
+  list.forEach(function(item) {
+    item.share = declared > 0 ? item.total / declared : 0;
+  });
+
+  return {
+    list: list,
+    declared: declared,
+    complement: complement,
+    total: declared + complement
+  };
+}
+
+/**
+ * Predios que están entregando. En terreno cada predio es un frente de
+ * cosecha: si bajan los frentes activos, el mes se cae aunque el volumen
+ * todavía no lo muestre.
+ */
+function buildEstateMix(rows) {
+  var wd = workdays();
+  var reference = wd.referenceDate || '';
+  var buckets = {};
+  var complement = 0;
+  var unassigned = 0;
+
+  rows.forEach(function(row) {
+    var amount = Number(row.cantidad) || 0;
+
+    if (row.source === 'GMAIL') {
+      complement += amount;
+      return;
+    }
+
+    if (!row.predio) {
+      unassigned += amount;
+      return;
+    }
+
+    var bucket = buckets[row.predio];
+
+    if (!bucket) {
+      bucket = buckets[row.predio] = {
+        predio: row.predio,
+        total: 0,
+        providers: {},
+        roles: {},
+        firstDate: row.fecha,
+        lastDate: row.fecha,
+        days: {}
+      };
+    }
+
+    bucket.total += amount;
+    bucket.providers[row.provider] = true;
+
+    if (row.rol) { bucket.roles[row.rol] = true; }
+    if (amount > 0) { bucket.days[row.fecha] = true; }
+
+    if (row.fecha < bucket.firstDate) { bucket.firstDate = row.fecha; }
+    if (row.fecha > bucket.lastDate) { bucket.lastDate = row.fecha; }
+  });
+
+  var list = Object.keys(buckets).map(function(key) {
+    var bucket = buckets[key];
+    var dates = Object.keys(bucket.days).sort();
+    var cadence = medianGap(dates);
+    var idleDays = countWorkdaysBetween(bucket.lastDate, reference);
+
+    // Un predio no entrega todos los días: entre faena, camino y camión
+    // hay un ritmo propio. Medirlo con el mismo umbral del proveedor
+    // marcaría casi todos los frentes y el dato no diría nada. Se compara
+    // contra su propia cadencia: detenido es el que lleva el doble de lo
+    // que suele tardar, y nunca menos de cuatro días hábiles.
+    var threshold = cadence === null
+      ? 4
+      : Math.max(4, Math.ceil(cadence * 2));
+
+    return {
+      predio: bucket.predio,
+      total: bucket.total,
+      providers: Object.keys(bucket.providers).sort(),
+      roles: Object.keys(bucket.roles).sort(),
+      days: dates.length,
+      firstDate: bucket.firstDate,
+      lastDate: bucket.lastDate,
+      cadence: cadence,
+      idleDays: idleDays,
+      threshold: threshold,
+      stalled: dates.length >= 2 && idleDays >= threshold
+    };
+  });
+
+  var declared = list.reduce(function(total, item) {
+    return total + item.total;
+  }, 0);
+
+  list.sort(function(a, b) { return b.total - a.total; });
+
+  list.forEach(function(item) {
+    item.share = declared > 0 ? item.total / declared : 0;
+  });
+
+  var stalled = list.filter(function(item) { return item.stalled; });
+
+  return {
+    list: list,
+    active: list.length,
+    stalled: stalled,
+    declared: declared,
+    complement: complement,
+    unassigned: unassigned,
+    concentration: herfindahl(list.map(function(item) { return item.total; }))
+  };
+}
+
+/**
+ * Semáforo declarado. El informe diario trae el estatus que el propio
+ * proveedor se pone (VERDE / AMARILLO / ROJO). Es un indicador adelantado:
+ * el proveedor se declara en rojo antes de que el volumen caiga.
+ */
+function buildStatusMix(rows) {
+  var order = ['VERDE', 'AMARILLO', 'NARANJO', 'ROJO'];
+  var counts = {};
+  var latestByProvider = {};
+
+  rows.forEach(function(row) {
+    if (row.source !== 'GMAIL' || !row.estatus) { return; }
+
+    // joinUnique_ puede haber pegado varios estatus del mismo día.
+    String(row.estatus).split('/').forEach(function(piece) {
+      var key = norm(piece);
+
+      if (!key) { return; }
+
+      counts[key] = (counts[key] || 0) + 1;
+    });
+
+    var current = latestByProvider[row.provider];
+
+    if (!current || row.fecha >= current.fecha) {
+      latestByProvider[row.provider] = {
+        fecha: row.fecha,
+        estatus: norm(String(row.estatus).split('/')[0]),
+        cantidad: Number(row.cantidad) || 0
+      };
+    }
+  });
+
+  var known = order.filter(function(key) { return counts[key]; });
+  var others = Object.keys(counts).filter(function(key) {
+    return order.indexOf(key) === -1;
+  }).sort();
+
+  var total = Object.keys(counts).reduce(function(sum, key) {
+    return sum + counts[key];
+  }, 0);
+
+  return {
+    total: total,
+    reported: Object.keys(latestByProvider).length,
+    slices: known.concat(others).map(function(key) {
+      return {
+        estatus: key,
+        count: counts[key],
+        share: total > 0 ? counts[key] / total : 0
+      };
+    }),
+    latest: latestByProvider
+  };
+}
+
+/**
+ * Cartera de proveedores en dos ejes: cuánto está en riesgo y cuánto hay
+ * que empujar para evitarlo. Separa al proveedor grande que necesita un
+ * llamado del chico que no llega ni forzándolo.
+ */
+function buildPortfolio(summary) {
+  var EFFORT_CAP = 4;
+
+  return summary
+    .filter(function(item) { return item.plan > 0; })
+    .map(function(item) {
+      var effort = item.effort;
+      var capped = false;
+
+      if (effort === null || !isFinite(effort)) {
+        // Sin ritmo actual no hay múltiplo posible: es el caso extremo.
+        effort = item.requiredPace > 0 ? EFFORT_CAP : 0;
+        capped = item.requiredPace > 0;
+      } else if (effort > EFFORT_CAP) {
+        effort = EFFORT_CAP;
+        capped = true;
+      }
+
+      return {
+        provider: item.provider,
+        risk: item.risk,
+        effort: effort,
+        effortCapped: capped,
+        realEffort: item.effort,
+        plan: item.plan,
+        total: item.total,
+        pace: item.pace,
+        requiredPace: item.requiredPace,
+        band: item.band,
+        zone: zoneOf(effort, item.risk)
+      };
+    })
+    .sort(function(a, b) { return b.risk - a.risk; });
+}
+
+/**
+ * Zona de acción sobre el esfuerzo exigido.
+ */
+function zoneOf(effort, risk) {
+  if (risk <= 0) { return 'safe'; }
+  if (effort <= 1.15) { return 'nudge'; }
+  if (effort <= 1.6) { return 'push'; }
+  return 'replace';
+}
+
+var ZONE_LABEL = {
+  safe: 'Cierra su plan',
+  nudge: 'Con un llamado llega',
+  push: 'Exige empujar el programa',
+  replace: 'No llega: hay que reemplazar volumen'
+};
+
+var ZONE_COLOR = {
+  safe: PALETTE.brand,
+  nudge: PALETTE.brand3,
+  push: PALETTE.hiviz,
+  replace: PALETTE.crit
+};
+
+/**
+ * Autonomía del mes: con el ritmo de hoy, cuántos días hábiles de los que
+ * quedan alcanza a cubrir el plan que falta. Bajo 1 significa que el mes
+ * no cierra sin cambiar algo.
+ */
+function buildAutonomy(summary) {
+  var wd = workdays();
+  var plan = sum(summary, 'plan');
+  var total = sum(summary, 'total');
+  var pace = wd.elapsed > 0 ? total / wd.elapsed : 0;
+  var missing = Math.max(0, plan - total);
+
+  // Días hábiles que tomaría cerrar la brecha al ritmo actual.
+  var daysNeeded = pace > 0 ? missing / pace : null;
+
+  return {
+    plan: plan,
+    total: total,
+    pace: pace,
+    missing: missing,
+    daysNeeded: daysNeeded,
+    daysLeft: wd.remaining,
+    ratio: (daysNeeded !== null && wd.remaining > 0)
+      ? wd.remaining / daysNeeded
+      : null,
+    closes: daysNeeded !== null && daysNeeded <= wd.remaining
+  };
+}
+
+/**
+ * Cuántos nombres, de mayor a menor, hacen la parte indicada del total.
+ * El índice de Herfindahl compara meses; esto es lo que se puede llamar
+ * por teléfono.
+ */
+function headcountFor(values, share) {
+  var live = values
+    .filter(function(value) { return value > 0; })
+    .sort(function(a, b) { return b - a; });
+
+  var total = live.reduce(function(a, b) { return a + b; }, 0);
+
+  if (!total) { return null; }
+
+  var running = 0;
+
+  for (var index = 0; index < live.length; index++) {
+    running += live[index];
+
+    if (running / total >= share) { return index + 1; }
+  }
+
+  return live.length;
+}
+
+/**
+ * Índice de Herfindahl normalizado (0 = repartido, 1 = un solo nombre).
+ * Dice en un número si el abastecimiento depende de pocos.
+ */
+function herfindahl(values) {
+  var live = values.filter(function(value) { return value > 0; });
+
+  if (live.length < 2) { return live.length ? 1 : null; }
+
+  var total = live.reduce(function(a, b) { return a + b; }, 0);
+
+  if (!total) { return null; }
+
+  var index = live.reduce(function(acc, value) {
+    return acc + Math.pow(value / total, 2);
+  }, 0);
+
+  // Normaliza para que no dependa del número de proveedores.
+  return (index - 1 / live.length) / (1 - 1 / live.length);
+}
+
+/**
+ * Mediana del intervalo entre entregas, contado en días hábiles. Con una
+ * sola entrega no hay intervalo que medir y devuelve null.
+ */
+function medianGap(dates) {
+  if (!dates || dates.length < 2) { return null; }
+
+  var gaps = [];
+
+  for (var index = 1; index < dates.length; index++) {
+    gaps.push(countWorkdaysBetween(dates[index - 1], dates[index]));
+  }
+
+  gaps.sort(function(a, b) { return a - b; });
+
+  var middle = Math.floor(gaps.length / 2);
+
+  return gaps.length % 2
+    ? gaps[middle]
+    : (gaps[middle - 1] + gaps[middle]) / 2;
 }
 
 function countWorkdaysBetween(fromKey, toKey) {

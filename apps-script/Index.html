@@ -30,7 +30,7 @@
           <path d="M3 20h18M6 20V11M11 20V5M16 20v-6M21 20v-9"
                 stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
         </svg>
-        Panorama
+        <span class="rail-tab-label">Panorama</span>
       </button>
 
       <button type="button" class="rail-tab" role="tab" id="tab-proveedores"
@@ -39,8 +39,18 @@
           <path d="M4 6h16M4 12h16M4 18h9" stroke="currentColor"
                 stroke-width="1.6" stroke-linecap="round"/>
         </svg>
-        Proveedores
+        <span class="rail-tab-label">Proveedores</span>
         <span class="rail-tab-badge" id="badgeRisk" hidden>0</span>
+      </button>
+
+      <button type="button" class="rail-tab" role="tab" id="tab-forestal"
+              aria-controls="view-forestal" aria-selected="false" data-view="forestal">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3 7 11h10L12 3ZM12 9l-6 9h12l-6-9ZM12 18v3"
+                stroke="currentColor" stroke-width="1.5"
+                stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+        <span class="rail-tab-label">Forestal</span>
       </button>
 
       <button type="button" class="rail-tab" role="tab" id="tab-semana"
@@ -51,7 +61,7 @@
           <path d="M3 10h18M8 3v4M16 3v4M8 14h4" stroke="currentColor"
                 stroke-width="1.6" stroke-linecap="round"/>
         </svg>
-        Semana
+        <span class="rail-tab-label">Semana</span>
         <span class="rail-tab-badge" id="badgeNotes" hidden>0</span>
       </button>
 
@@ -61,7 +71,7 @@
           <path d="M4 4h16v16H4zM4 9h16M9 9v11" stroke="currentColor"
                 stroke-width="1.6" stroke-linejoin="round"/>
         </svg>
-        Detalle
+        <span class="rail-tab-label">Detalle</span>
       </button>
     </div>
 
@@ -249,8 +259,25 @@
 
         <section class="gauges" id="gauges" aria-label="Mediciones del mes"></section>
 
-        <div class="grid stagger">
+        <div class="grid grid-cal stagger">
           <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Días hábiles del mes</h2>
+                <p class="panel-note" id="calendarNote">
+                  Todo el plan a la fecha se apoya en este conteo, así que
+                  queda a la vista: los feriados legales de Chile y las
+                  paradas de la operación no cuentan, y un día recuperado
+                  sí. El recuadro marcado es la fecha de corte.
+                </p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="calendar" id="chartCalendar"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
             <div class="panel-head">
               <div>
                 <h2 class="panel-title">Curva de avance contra plan</h2>
@@ -270,8 +297,10 @@
               <div class="chart" id="chartCurve"></div>
             </div>
           </section>
+        </div>
 
-          <section class="panel" style="--i:1">
+        <div class="grid stagger">
+          <section class="panel full" style="--i:0">
             <div class="panel-head">
               <div>
                 <h2 class="panel-title">Recepción diaria</h2>
@@ -393,6 +422,135 @@
                 </thead>
                 <tbody id="providerBody"></tbody>
                 <tfoot id="providerFoot"></tfoot>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ============================================================
+           FORESTAL · DE DÓNDE VIENE EL SUMINISTRO
+           ============================================================ -->
+      <div class="tabpanel" id="view-forestal" role="tabpanel"
+           aria-labelledby="tab-forestal" hidden>
+
+        <section class="gauges" id="gaugesForestal"
+                 aria-label="Mediciones del abastecimiento"></section>
+
+        <div class="grid grid-lead stagger">
+          <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Riesgo contra esfuerzo exigido</h2>
+                <p class="panel-note">
+                  Cada burbuja es un proveedor: a la derecha, cuántas veces
+                  su ritmo actual habría que exigir para cerrar el plan; hacia
+                  arriba, los metros ruma que se pierden si nada cambia. El
+                  tamaño es su plan del mes. Separa al que se arregla con un
+                  llamado del que no llega ni forzándolo.
+                </p>
+                <p class="panel-note num" id="portfolioNote"></p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart" id="chartPortfolio"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Semáforo declarado</h2>
+                <p class="panel-note">
+                  El estatus que el proveedor se pone en su propio informe
+                  diario. Se adelanta al volumen: primero se declara en rojo
+                  y después deja de llegar el camión.
+                </p>
+                <p class="panel-note num" id="statusNote"></p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart chart-auto" id="chartStatus"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="grid grid-2 stagger">
+          <section class="panel" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Mix por producto</h2>
+                <p class="panel-note">
+                  Qué se está comprando, no solo cuánto. Una sola línea de
+                  producto concentrando todo el mes es un riesgo de precio y
+                  de destino.
+                </p>
+                <p class="panel-note num" id="productNote"></p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart chart-auto" id="chartProduct"></div>
+            </div>
+          </section>
+
+          <section class="panel" style="--i:1">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Frentes de cosecha</h2>
+                <p class="panel-note">
+                  Predios que movieron material este mes. Cada predio es un
+                  frente: si bajan los frentes activos, el mes se cae aunque
+                  el volumen todavía no lo muestre. En naranja, el frente
+                  detenido: lleva más del doble de su cadencia habitual sin
+                  entregar.
+                </p>
+                <p class="panel-note num" id="estateNote"></p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart chart-auto" id="chartEstates"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Decisión de compra por proveedor</h2>
+              <p class="panel-note">
+                Ordenado por metros ruma en riesgo. La columna de acción sale
+                del esfuerzo exigido; el ritmo es lo que hay que mover a
+                partir de hoy.
+              </p>
+            </div>
+            <div class="panel-tools">
+              <span class="stamp">
+                <span class="stamp-value" id="forestalCount">—</span>
+              </span>
+              <button type="button" class="btn btn-sm" id="btnForestalCopy">
+                Copiar tabla
+              </button>
+            </div>
+          </div>
+
+          <div class="panel-body panel-body-flush">
+            <div class="table-wrap">
+              <table class="table" id="forestalTable">
+                <thead>
+                  <tr>
+                    <th scope="col">Proveedor</th>
+                    <th scope="col">Qué hacer</th>
+                    <th class="n" scope="col">Plan mes</th>
+                    <th class="n" scope="col">Recibido</th>
+                    <th class="n" scope="col">MR en riesgo</th>
+                    <th class="n" scope="col">Ritmo actual</th>
+                    <th class="n" scope="col">Ritmo exigido</th>
+                    <th class="n" scope="col">Esfuerzo</th>
+                    <th class="n" scope="col">Regularidad</th>
+                    <th scope="col">Estatus</th>
+                  </tr>
+                </thead>
+                <tbody id="forestalBody"></tbody>
               </table>
             </div>
           </div>
