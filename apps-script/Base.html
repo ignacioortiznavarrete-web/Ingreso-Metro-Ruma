@@ -31,6 +31,14 @@ var PALETTE = {
   brand2: '#2e6244',
   brand3: '#739e83',
   brandInk: '#143623',
+  /* Par divergente para las marcas de gráfico: adelanto / atraso.
+     No es el verde de la marca. Ese es oklch L 0,32 y contra el rojo daba
+     ΔE 5,7 en protanopia —un daltónico no los separa— además de ser
+     demasiado oscuro para un relleno grande. Este par está medido con el
+     validador y pasa los seis controles: ΔE 11,4 en deuteranopia, 29,2 en
+     visión normal. Solo para marcas: en texto no llega a 4,5:1. */
+  divOver: '#00906c',
+  divUnder: '#a82120',
   hiviz: '#e26605',
   hivizInk: '#934003',
   crit: '#a82120',

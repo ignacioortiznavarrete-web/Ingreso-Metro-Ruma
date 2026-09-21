@@ -1028,102 +1028,354 @@ function drawPareto() {
 }
 
 /* ---------------------------------------------------------------------
- * CALENDARIO DE DÍAS HÁBILES
- * El plan a la fecha se apoya entero en este conteo, así que se dibuja:
- * cada día del mes con su motivo, para revisar el prorrateo de un vistazo
- * sin abrir el código.
+ * BRECHA CONTRA EL PLAN, DÍA A DÍA
+ *
+ * Área divergente sobre la línea del cero. El par de colores no es el de
+ * la marca: el verde bosque es demasiado oscuro para un relleno grande y
+ * contra el rojo daba ΔE 5,7 en protanopia, o sea que un daltónico no los
+ * separa. Este par está medido y pasa (ΔE 11,4 en deuteranopia). Además
+ * el lado del cero ya dice el signo, así que el color solo refuerza.
  * ------------------------------------------------------------------- */
 
-function drawCalendar() {
-  var host = id('chartCalendar');
+function drawGapTrend() {
+  var host = id('chartGapTrend');
 
   if (!host) { return; }
 
-  var wd = workdays();
-  var days = wd.calendar || [];
+  var series = buildGapSeries(ROWS, SUMMARY);
 
-  if (!days.length) {
-    host.innerHTML = '<div class="chart-empty">Sin calendario para el mes ' +
-      'seleccionado.</div>';
+  if (series.length < 2) {
+    setChartEmpty(host, 'Todavía no hay días hábiles suficientes para ' +
+      'dibujar la brecha.');
     return;
   }
 
-  var NAMES = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
-  var cells = [];
+  host.className = 'chart';
 
-  // Rejilla de lunes a domingo: el primer día se desplaza a su columna.
-  var lead = (days[0].dayOfWeek + 6) % 7;
+  var width = px(host);
+  var height = 300;
+  var padL = 62;
+  var padR = 16;
+  var padT = 18;
+  var padB = 40;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
 
-  for (var pad = 0; pad < lead; pad++) {
-    cells.push(tag('div', {
-      class: 'cal-cell is-pad', 'aria-hidden': 'true'
-    }, ''));
-  }
+  var values = series.map(function(point) { return point.gap; });
 
-  days.forEach(function(day, index) {
-    var classes = ['cal-cell', 'is-' + day.kind];
+  // El eje incluye siempre el cero, pero no se fuerza simétrico: un mes
+  // que nunca estuvo adelantado desperdiciaba media altura en un tramo
+  // positivo vacío, y la brecha se veía la mitad de profunda de lo que es.
+  var highest = Math.max.apply(null, values);
+  var lowest = Math.min.apply(null, values);
 
-    if (day.elapsed) { classes.push('is-elapsed'); }
-    if (day.isReference) { classes.push('is-cut'); }
+  // Solo hay banda del lado donde hay datos. Sin esto, niceMax(0) inventa
+  // un techo de 10 y su marca se encabalga con la del cero.
+  var topNice = highest > 0 ? niceMax(highest * 1.12) : 0;
+  var bottomNice = lowest < 0 ? niceMax(-lowest * 1.12) : 0;
 
-    var reason = day.reason ||
-      (day.kind === 'weekend' ? 'Fin de semana' : 'Día hábil');
+  if (!topNice && !bottomNice) { topNice = bottomNice = 10; }
 
-    var tip = tipRow(dmy(day.key), [
-      ['Cuenta para el plan',
-        day.kind === 'workday' || day.kind === 'recovered' ? 'Sí' : 'No'],
-      ['Motivo', reason],
-      day.elapsed ? ['Estado', 'Transcurrido'] : null,
-      day.isReference ? ['Corte', 'Fecha de referencia'] : null
-    ]);
+  // Un respiro del lado vacío para que la línea del cero no quede pegada
+  // al borde del dibujo.
+  var top = topNice || bottomNice * 0.08;
+  var bottom = bottomNice || topNice * 0.08;
+  var range = top + bottom;
 
-    classes.push('cal-pop');
+  var count = series.length;
+  var toX = function(index) {
+    return padL + (count === 1 ? innerW / 2 : (index / (count - 1)) * innerW);
+  };
+  var toY = function(value) {
+    return padT + innerH - ((value + bottom) / range) * innerH;
+  };
 
-    // tag() escapa solo las comillas del atributo, así que el HTML del
-    // tooltip llega entero. Con esc() se vería el marcado en crudo.
-    cells.push(tag('div', {
-      class: classes.join(' '),
-      'data-tip': tip,
-      style: '--i:' + index
-    },
-      tag('span', { class: 'cal-day num' }, String(day.day)) +
-      (day.kind === 'holiday'
-        ? tag('span', { class: 'cal-mark', 'aria-hidden': 'true' }, '')
-        : '') +
-      (day.kind === 'recovered'
-        ? tag('span', { class: 'cal-mark is-plus', 'aria-hidden': 'true' }, '+')
-        : '')
-    ));
+  var zero = toY(0);
+  var parts = [];
+
+  // Marcas proporcionales a cada lado del cero, no un número fijo: con el
+  // eje asimétrico repartirlas por igual daría cifras arbitrarias.
+  var marks = [0];
+
+  [0.5, 1].forEach(function(fraction) {
+    if (topNice) { marks.push(topNice * fraction); }
+    if (bottomNice) { marks.push(-bottomNice * fraction); }
   });
 
-  var discounted = wd.discounted || [];
+  // Rejilla: hairline sólida, nunca punteada (una rejilla punteada se lee
+  // como umbral y acá el único umbral es el cero).
+  marks.forEach(function(value) {
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: value === 0 ? 'chart-rule' : 'chart-grid'
+    }));
 
-  host.innerHTML =
-    '<div class="cal-head">' +
-      NAMES.map(function(name, index) {
-        return '<span class="cal-dow' +
-          (index >= 5 ? ' is-off' : '') + '">' + name + '</span>';
-      }).join('') +
-    '</div>' +
-    '<div class="cal-grid">' + cells.join('') + '</div>' +
-    '<div class="cal-foot">' +
-      '<span class="key"><span class="key-swatch key-swatch-cal"></span>' +
-        'Hábil transcurrido</span>' +
-      '<span class="key"><span class="key-swatch key-swatch-calnext"></span>' +
-        'Hábil por venir</span>' +
-      '<span class="key"><span class="key-swatch key-swatch-calhol"></span>' +
-        'Feriado o parada</span>' +
-      '<span class="key"><span class="key-swatch key-swatch-calweek"></span>' +
-        'Fin de semana</span>' +
-    '</div>' +
-    (discounted.length
-      ? '<ul class="cal-list">' + discounted.map(function(item) {
-          return '<li><b class="num">' + esc(dmy(item.key)) + '</b>' +
-            esc(item.reason) + '</li>';
-        }).join('') + '</ul>'
-      : '<p class="cal-none">Ningún feriado cayó en día hábil este mes.</p>');
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, value === 0 ? '0' : signed(value)));
+  });
+
+  var points = series.map(function(point, index) {
+    return [toX(index), toY(point.gap)];
+  });
+
+  // Dos áreas recortadas por el cero: la de arriba y la de abajo. El
+  // recorte evita pintar de verde un tramo que está bajo la línea.
+  parts.push(tag('clipPath', { id: 'gapOver' },
+    tag('rect', { x: padL, y: padT, width: innerW, height: Math.max(0, zero - padT) })
+  ));
+
+  parts.push(tag('clipPath', { id: 'gapUnder' },
+    tag('rect', { x: padL, y: zero, width: innerW, height: Math.max(0, padT + innerH - zero) })
+  ));
+
+  parts.push(tag('g', { 'clip-path': 'url(#gapOver)' },
+    area(points, zero, 'rgba(0, 144, 108, .20)')
+  ));
+
+  parts.push(tag('g', { 'clip-path': 'url(#gapUnder)' },
+    area(points, zero, 'rgba(168, 33, 32, .18)')
+  ));
+
+  var last = series[series.length - 1];
+  var lineColor = last.gap >= 0 ? PALETTE.divOver : PALETTE.divUnder;
+
+  parts.push(line(points, lineColor, 2, null, true));
+
+  // El día en que la brecha cambió de signo: es la fecha que se quiere
+  // recordar, así que va marcada y rotulada.
+  var crossing = -1;
+
+  for (var index = 1; index < series.length; index++) {
+    if ((series[index - 1].gap >= 0) !== (series[index].gap >= 0)) {
+      crossing = index;
+    }
+  }
+
+  if (crossing > 0) {
+    parts.push(tag('line', {
+      x1: toX(crossing), x2: toX(crossing), y1: padT, y2: padT + innerH,
+      stroke: PALETTE.line2, 'stroke-width': 1
+    }));
+
+    parts.push(tag('text', {
+      x: toX(crossing) + 5, y: padT + 10,
+      class: 'chart-label ghost', style: 'font-size:10px'
+    }, 'se dio vuelta el ' + series[crossing].label.slice(0, 5)));
+  }
+
+  // Rótulo directo solo en el extremo: un número por punto sería ruido.
+  parts.push(tag('circle', {
+    cx: points[points.length - 1][0], cy: points[points.length - 1][1],
+    r: 4, fill: lineColor, stroke: '#ffffff', 'stroke-width': 2,
+    class: 'ghost'
+  }));
+
+  // Acotada al área de dibujo: cerca del borde, la etiqueta se iba sobre
+  // las fechas del eje.
+  var labelY = Math.min(
+    padT + innerH - 6,
+    Math.max(padT + 12, toY(last.gap) + (last.gap >= 0 ? -12 : 18))
+  );
+
+  parts.push(tag('text', {
+    x: width - padR, y: labelY,
+    'text-anchor': 'end', class: 'chart-value ghost',
+    fillStyle: last.gap >= 0 ? PALETTE.divOver : PALETTE.divUnder,
+    style: 'font-size:12px;font-weight:700'
+  }, signed(last.gap) + ' MR'));
+
+  // Marcas del eje de fechas, no una por día.
+  var step = Math.max(1, Math.ceil(count / 8));
+
+  series.forEach(function(point, index) {
+    if (index % step && index !== count - 1) { return; }
+
+    parts.push(tag('text', {
+      x: toX(index), y: height - padB + 16,
+      'text-anchor': 'middle', class: 'chart-axis'
+    }, point.label.slice(0, 5)));
+  });
+
+  // Zona sensible por día para el tooltip: más ancha que la marca.
+  var slot = innerW / Math.max(1, count - 1);
+
+  series.forEach(function(point, index) {
+    parts.push(tag('rect', {
+      x: toX(index) - slot / 2, y: padT,
+      width: slot, height: innerH,
+      fill: 'transparent',
+      'data-tip': tipRow(point.label, [
+        ['Recibido acumulado', fmt(point.cumulative) + ' MR'],
+        ['Plan a esa fecha', fmt(point.planAt) + ' MR'],
+        ['Brecha', signed(point.gap) + ' MR'],
+        ['Sobre el plan del día', signed(point.share * 100, 0) + '%']
+      ])
+    }));
+  });
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Brecha acumulada contra el plan, día hábil a día hábil.'
+  }, parts.join(''));
 
   bindTips(host);
+}
+
+/* ---------------------------------------------------------------------
+ * QUIÉN CAMBIÓ EL RITMO
+ *
+ * Mancuerna: un punto hueco donde estaba y uno sólido donde está. La
+ * forma dice "antes y después" mejor que una barra, y no se confunde con
+ * el desvío por proveedor de la vista Proveedores, que es un nivel y no
+ * un cambio.
+ * ------------------------------------------------------------------- */
+
+/**
+ * El cambio de ritmo en palabras cuando el porcentaje mentiría: quien
+ * venía de cero no subió 100%, arrancó; quien llegó a cero no bajó 100%,
+ * se detuvo.
+ */
+function paceChangeLabel(item) {
+  if (item.stopped) { return 'se detuvo'; }
+  if (item.before === 0) { return 'arrancó'; }
+
+  return signed(item.ratio * 100, 0) + '%';
+}
+
+function drawPaceShift() {
+  var host = id('chartPace');
+  var note = id('paceNote');
+
+  if (!host) { return; }
+
+  var rows = buildPaceShift(ROWS, SUMMARY).slice(0, 12);
+
+  if (!rows.length) {
+    setChartEmpty(host, 'Hacen falta diez días hábiles corridos para ' +
+      'comparar una semana con la anterior.');
+    if (note) { note.textContent = ''; }
+    return;
+  }
+
+  host.className = 'chart chart-auto';
+
+  var width = px(host);
+  var rowH = 28;
+  var padL = Math.min(210, Math.max(120, width * 0.26));
+  var padR = 104;
+  var padT = 26;
+  var height = padT + rows.length * rowH + 14;
+  var innerW = Math.max(60, width - padL - padR);
+
+  var max = niceMax(Math.max.apply(null, rows.map(function(item) {
+    return Math.max(item.before, item.after);
+  }).concat([1])) * 1.05);
+
+  var toX = function(value) { return padL + (value / max) * innerW; };
+  var parts = [];
+
+  // Cinco divisiones en vez de cuatro: con la escala de AXIS_STEPS los
+  // quintos caen en cifras redondas y los cuartos no (62,5 y 188).
+  [0, 0.2, 0.4, 0.6, 0.8, 1].forEach(function(fraction) {
+    var x = padL + fraction * innerW;
+
+    parts.push(tag('line', {
+      x1: x, x2: x, y1: padT - 6, y2: padT + rows.length * rowH,
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: x, y: padT - 12, 'text-anchor': 'middle', class: 'chart-axis'
+    }, fmt(max * fraction)));
+  });
+
+  rows.forEach(function(item, index) {
+    var y = padT + index * rowH + rowH / 2;
+    var up = item.change >= 0;
+    var color = up ? PALETTE.divOver : PALETTE.divUnder;
+
+    parts.push(tag('text', {
+      x: padL - 10, y: y + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, esc(clip(item.provider, 22))));
+
+    var tip = tipRow(item.provider, [
+      ['Ritmo anterior', fmt(item.before) + ' MR/día'],
+      ['Ritmo actual', fmt(item.after) + ' MR/día'],
+      ['Cambio', signed(item.change) + ' MR/día'],
+      ['En porcentaje', item.before === 0
+        ? 'venía de cero'
+        : signed(item.ratio * 100, 0) + '%'],
+      item.stopped ? ['Aviso', 'dejó de entregar'] : null,
+      item.plan ? ['Plan del mes', fmt(item.plan) + ' MR'] : null
+    ]);
+
+    // El trazo entre los dos puntos: su largo es el cambio y su color, el
+    // sentido. La posición de los puntos ya dice el sentido sin color.
+    parts.push(tag('line', {
+      x1: toX(item.before), x2: toX(item.after), y1: y, y2: y,
+      stroke: color, 'stroke-width': 3, 'stroke-linecap': 'round',
+      class: 'bar-wide',
+      style: 'transform-origin:' + toX(Math.min(item.before, item.after)) +
+        'px 0;animation-delay:' + (index * 24) + 'ms',
+      'data-tip': tip
+    }));
+
+    // Antes: hueco. Ahora: sólido. Anillo de superficie de 2px para que
+    // no se peguen cuando el cambio es chico.
+    parts.push(tag('circle', {
+      cx: toX(item.before), cy: y, r: 4.5,
+      fill: '#ffffff', stroke: PALETTE.ink3, 'stroke-width': 1.6,
+      class: 'ghost', 'data-tip': tip
+    }));
+
+    parts.push(tag('circle', {
+      cx: toX(item.after), cy: y, r: 5,
+      fill: color, stroke: '#ffffff', 'stroke-width': 2,
+      class: 'blip', style: 'animation-delay:' + (index * 24 + 80) + 'ms',
+      'data-tip': tip
+    }));
+
+    parts.push(tag('text', {
+      x: width - padR + 10, y: y + 3.5,
+      class: 'chart-value',
+      fillStyle: color
+    }, paceChangeLabel(item)));
+  });
+
+  parts.push(tag('g', { transform: 'translate(' + padL + ',' + (height - 2) + ')' },
+    tag('circle', { cx: 5, cy: -4, r: 4.5, fill: '#ffffff',
+      stroke: PALETTE.ink3, 'stroke-width': 1.6 }) +
+    tag('text', { x: 15, y: -1, class: 'chart-label', style: 'font-size:10px' },
+      'ritmo de los 5 días anteriores') +
+    tag('circle', { cx: 215, cy: -4, r: 5, fill: PALETTE.ink2 }) +
+    tag('text', { x: 226, y: -1, class: 'chart-label', style: 'font-size:10px' },
+      'ritmo de los últimos 5 días')
+  ));
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + (height + 12),
+    width: '100%', height: height + 12, role: 'img',
+    'aria-label': 'Cambio del ritmo diario por proveedor.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  if (note) {
+    var down = rows.filter(function(item) { return item.change < 0; });
+    var stopped = rows.filter(function(item) { return item.stopped; });
+
+    note.textContent = down.length
+      ? down.length + ' de ' + rows.length + ' bajaron el ritmo' +
+        (stopped.length
+          ? ' y ' + stopped.length +
+            (stopped.length === 1 ? ' dejó' : ' dejaron') + ' de entregar.'
+          : '.')
+      : 'Ninguno de los ' + rows.length + ' bajó el ritmo esta semana.';
+  }
 }
 
 /* ---------------------------------------------------------------------
@@ -1721,9 +1973,10 @@ function redrawCharts() {
 
   if (VIEW === 'panorama') {
     drawRuma();
-    drawCalendar();
+    drawGapTrend();
     drawCurve();
     drawDaily();
+    drawPaceShift();
   } else if (VIEW === 'proveedores') {
     drawGap();
     drawPareto();

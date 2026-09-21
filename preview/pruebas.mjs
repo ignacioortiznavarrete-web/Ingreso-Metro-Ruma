@@ -249,20 +249,18 @@ await q2.waitForSelector('#detailBody tr'); await q2.waitForTimeout(700);
 ok('recuerda la última vista', await q2.locator('#view-detalle').isVisible());
 ok('recuerda el filtro de fuente', await q2.locator('#fSource').inputValue() === '');
 
-/* ============ calendario de dias habiles ============ */
+/* ============ dias habiles (el dato, ya no un panel) ============ */
 await q.keyboard.press('1'); await q.waitForTimeout(700);
 
+// El calendario dejó de dibujarse: el comprador conoce sus días hábiles.
+// Lo que sigue importando es el conteo, porque de él cuelga todo el
+// prorrateo. El detalle día a día se comprueba en backend.mjs.
 const cal = await q.evaluate(() => {
   const wd = DATA.workdays;
-  const count = (kind) => wd.calendar.filter((d) => d.kind === kind).length;
 
   return {
     total: wd.total,
     elapsed: wd.elapsed,
-    dias: wd.calendar.length,
-    habiles: count('workday'),
-    feriados: count('holiday'),
-    finde: count('weekend'),
     descontados: wd.discounted.map((d) => d.key + ' ' + d.reason),
     corridos: wd.calendar.filter((d) => d.elapsed).length
   };
@@ -276,22 +274,76 @@ ok('el feriado en habil queda registrado',
    cal.descontados.length === 1 &&
    cal.descontados[0] === '2026-09-18 Independencia Nacional',
    cal.descontados.join(' | ') || 'ninguno');
-ok('el calendario cubre el mes', cal.dias === 30, cal.dias + ' dias');
-ok('el conteo cuadra', cal.habiles === cal.total,
-   `habiles=${cal.habiles} total=${cal.total}`);
 ok('transcurridos coinciden', cal.corridos === cal.elapsed,
    `${cal.corridos} vs ${cal.elapsed}`);
+ok('el feriado sale en el aviso',
+   (await q.locator('#bannerInfoText').innerText()).includes('18/09/2026'));
+ok('ya no se dibuja el calendario',
+   await q.locator('#chartCalendar').count() === 0);
 
-const celdas = await q.locator('#chartCalendar .cal-cell:not(.is-pad)').count();
-ok('pinta una casilla por dia', celdas === 30, celdas + ' casillas');
-ok('marca el feriado',
-   await q.locator('#chartCalendar .cal-cell.is-holiday').count() === 2,
-   (await q.locator('#chartCalendar .cal-cell.is-holiday').count()) + ' tachadas');
-ok('marca la fecha de corte',
-   await q.locator('#chartCalendar .cal-cell.is-cut').count() === 1);
-ok('lista el feriado descontado',
-   (await q.locator('#chartCalendar .cal-list li').innerText())
-     .includes('Independencia'));
+/* ============ brecha contra el plan, dia a dia ============ */
+ok('dibuja la brecha diaria',
+   await q.locator('#chartGapTrend svg').count() === 1);
+
+// La serie tiene que cuadrar con el acumulado: la brecha del ultimo dia
+// es lo recibido menos lo que el plan pedia a esa altura.
+const brecha = await q.evaluate(() => {
+  const serie = buildGapSeries(ROWS, SUMMARY);
+  const ultimo = serie[serie.length - 1];
+  const plan = SUMMARY.reduce((s, i) => s + i.plan, 0);
+  const total = ROWS.reduce((s, r) => s + (Number(r.cantidad) || 0), 0);
+
+  return {
+    puntos: serie.length,
+    gap: Math.round(ultimo.gap),
+    esperado: Math.round(ultimo.cumulative - ultimo.planAt),
+    acumulaTodo: Math.abs(ultimo.cumulative - total) < 1,
+    planFinal: Math.round(ultimo.planAt),
+    planMes: Math.round(plan * DATA.workdays.elapsed / DATA.workdays.total)
+  };
+});
+
+ok('un punto por dia habil corrido', brecha.puntos === cal.elapsed,
+   brecha.puntos + ' de ' + cal.elapsed);
+ok('la brecha es acumulado menos plan a la fecha',
+   brecha.gap === brecha.esperado, brecha.gap + ' vs ' + brecha.esperado);
+ok('el acumulado llega al total del mes', brecha.acumulaTodo);
+ok('el plan del ultimo punto es el plan a la fecha',
+   Math.abs(brecha.planFinal - brecha.planMes) <= 1,
+   brecha.planFinal + ' vs ' + brecha.planMes);
+// Los <text> de SVG no son HTMLElement: innerText no aplica.
+ok('marca el valor del extremo', await q.evaluate(() =>
+  [...document.querySelectorAll('#chartGapTrend text')]
+    .some((node) => (node.textContent || '').includes('MR'))));
+
+/* ============ quien cambio el ritmo ============ */
+ok('dibuja las mancuernas',
+   await q.locator('#chartPace svg circle').count() > 4,
+   (await q.locator('#chartPace svg circle').count()) + ' puntos');
+
+const ritmo = await q.evaluate(() => {
+  const filas = buildPaceShift(ROWS, SUMMARY);
+  const primero = filas[0];
+
+  return {
+    filas: filas.length,
+    ordenado: filas.every((f, i) =>
+      i === 0 || Math.abs(filas[i - 1].change) >= Math.abs(f.change)),
+    cambioCuadra: Math.abs(
+      primero.change - (primero.after - primero.before)
+    ) < 0.001,
+    // Nadie con las dos ventanas en cero debe aparecer.
+    sinVacios: filas.every((f) => f.before > 0 || f.after > 0)
+  };
+});
+
+ok('compara las dos ventanas', ritmo.filas > 0, ritmo.filas + ' proveedores');
+ok('ordena por magnitud del cambio', ritmo.ordenado);
+ok('el cambio es despues menos antes', ritmo.cambioCuadra);
+ok('descarta a los que no movieron nada', ritmo.sinVacios);
+ok('resume cuantos bajaron',
+   (await q.locator('#paceNote').innerText()).includes('ritmo'),
+   await q.locator('#paceNote').innerText());
 
 /* ============ vista forestal ============ */
 await q.keyboard.press('3'); await q.waitForTimeout(900);

@@ -263,17 +263,17 @@
           <section class="panel" style="--i:0">
             <div class="panel-head">
               <div>
-                <h2 class="panel-title">Días hábiles del mes</h2>
-                <p class="panel-note" id="calendarNote">
-                  Todo el plan a la fecha se apoya en este conteo, así que
-                  queda a la vista: los feriados legales de Chile y las
-                  paradas de la operación no cuentan, y un día recuperado
-                  sí. El recuadro marcado es la fecha de corte.
+                <h2 class="panel-title">Brecha contra el plan, día a día</h2>
+                <p class="panel-note">
+                  Lo recibido menos lo que el plan pedía a esa altura del mes.
+                  Sobre la línea se va adelantado; bajo ella, atrasado. Dice
+                  cuándo se abrió el hoyo y si se está cerrando o hundiendo,
+                  que es lo que la curva obliga a calcular a ojo.
                 </p>
               </div>
             </div>
             <div class="panel-body">
-              <div class="calendar" id="chartCalendar"></div>
+              <div class="chart" id="chartGapTrend"></div>
             </div>
           </section>
 
@@ -313,6 +313,27 @@
             </div>
             <div class="panel-body">
               <div class="chart" id="chartDaily"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="grid stagger">
+          <section class="panel full" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Quién cambió el ritmo</h2>
+                <p class="panel-note">
+                  Los MR por día hábil de los últimos cinco días contra los
+                  cinco anteriores. El punto hueco es antes, el sólido es
+                  ahora. Un proveedor muy atrasado que está subiendo no
+                  necesita el mismo llamado que uno que se está apagando, y
+                  eso el desvío contra el plan no lo distingue.
+                </p>
+                <p class="panel-note num" id="paceNote"></p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart chart-auto" id="chartPace"></div>
             </div>
           </section>
         </div>

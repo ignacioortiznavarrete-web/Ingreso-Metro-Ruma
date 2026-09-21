@@ -382,6 +382,119 @@ function buildWeeks(rows, summary) {
   }).filter(function(item) { return item.daysElapsed > 0; });
 }
 
+/**
+ * Brecha acumulada contra el plan, día hábil a día hábil.
+ *
+ * La curva dibuja dos líneas y deja que el ojo mida la distancia entre
+ * ellas. Esto dibuja la distancia directamente: positivo es adelanto,
+ * negativo es atraso, y el cruce por cero es el día en que el mes se dio
+ * vuelta. Es la misma información, pero sin obligar a restar de memoria.
+ */
+function buildGapSeries(rows, summary) {
+  var wd = workdays();
+  var keys = wd.workdayKeys || [];
+  var total = keys.length;
+
+  if (!total) { return []; }
+
+  var plan = sum(summary, 'plan');
+  var daily = buildDaily(rows);
+  var reference = wd.referenceDate || '';
+
+  return daily
+    .filter(function(point) { return point.key <= reference; })
+    .map(function(point, index) {
+      // El plan pedía esta fracción del mes a esa altura.
+      var planAt = plan * (index + 1) / total;
+
+      return {
+        key: point.key,
+        label: point.label,
+        cumulative: point.cumulative,
+        planAt: planAt,
+        gap: point.cumulative - planAt,
+        // En porcentaje del plan a la fecha, para leer la magnitud sin
+        // depender del tamaño del mes.
+        share: planAt > 0 ? (point.cumulative - planAt) / planAt : 0
+      };
+    });
+}
+
+/**
+ * Cambio de ritmo por proveedor: MR por día hábil de los últimos cinco
+ * días contra los cinco anteriores.
+ *
+ * El desvío contra el plan dice cuánto falta; esto dice hacia dónde va.
+ * Son preguntas distintas: un proveedor muy atrasado que está subiendo no
+ * necesita el mismo llamado que uno que se está apagando, y por el desvío
+ * los dos se ven igual de mal.
+ */
+function buildPaceShift(rows, summary) {
+  var VENTANA = 5;
+  var wd = workdays();
+  var reference = wd.referenceDate || '';
+
+  var elapsed = (wd.workdayKeys || []).filter(function(key) {
+    return key <= reference;
+  });
+
+  // Sin dos ventanas completas no hay comparación honesta que hacer.
+  if (elapsed.length < VENTANA * 2) { return []; }
+
+  var recent = {};
+  var previous = {};
+
+  elapsed.slice(-VENTANA).forEach(function(key) { recent[key] = true; });
+  elapsed.slice(-VENTANA * 2, -VENTANA).forEach(function(key) {
+    previous[key] = true;
+  });
+
+  var buckets = {};
+
+  rows.forEach(function(row) {
+    var bucket = buckets[row.provider];
+
+    if (!bucket) {
+      bucket = buckets[row.provider] = { before: 0, after: 0 };
+    }
+
+    var amount = Number(row.cantidad) || 0;
+
+    if (recent[row.fecha]) { bucket.after += amount; }
+    else if (previous[row.fecha]) { bucket.before += amount; }
+  });
+
+  var planOf = {};
+
+  summary.forEach(function(item) { planOf[item.provider] = item.plan; });
+
+  return Object.keys(buckets)
+    .map(function(provider) {
+      var bucket = buckets[provider];
+      var before = bucket.before / VENTANA;
+      var after = bucket.after / VENTANA;
+
+      return {
+        provider: provider,
+        before: before,
+        after: after,
+        change: after - before,
+        // Relativo a su propio ritmo anterior: un proveedor chico que
+        // duplica importa tanto como uno grande que sube 10%.
+        ratio: before > 0 ? after / before - 1 : (after > 0 ? 1 : 0),
+        plan: planOf[provider] || 0,
+        stopped: after === 0 && before > 0
+      };
+    })
+    .filter(function(item) {
+      // Los que no movieron nada en ninguna ventana no dicen nada.
+      return item.before > 0 || item.after > 0;
+    })
+    .sort(function(a, b) {
+      return Math.abs(b.change) - Math.abs(a.change);
+    });
+}
+
 /* =====================================================================
  * ANÁLISIS FORESTAL
  *

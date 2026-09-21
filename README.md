@@ -17,12 +17,12 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/Estilos.html` | Sistema visual: tokens, componentes, movimiento e impresión. | ~1.890 |
 | `apps-script/Base.html` | Estado compartido, navegación, carga, preferencias y formato. | ~700 |
 | `apps-script/Analisis.html` | Todas las métricas: proveedor, día, semana y origen del suministro. | ~805 |
-| `apps-script/Graficos.html` | Motor SVG propio: ruma, calendario, curva, diario, desvío, Pareto, mix, frentes, semáforo, matriz y sparkline. | ~1.720 |
+| `apps-script/Graficos.html` | Motor SVG propio: ruma, brecha diaria, curva, diario, mancuerna de ritmo, desvío, Pareto, mix, frentes, semáforo, matriz y sparkline. | ~1.800 |
 | `apps-script/Tablero.html` | Panorama, proveedores, forestal, detalle y la ficha lateral. | ~1.230 |
 | `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 76 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/pruebas.mjs` | 84 comprobaciones de interacción sobre la copia autónoma. | |
 | `preview/backend.mjs` | 28 comprobaciones del backend: calendario y homologación. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
@@ -50,7 +50,7 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
 node preview/backend.mjs        # 28 comprobaciones del backend, sin navegador
-node preview/pruebas.mjs        # 76 comprobaciones de interacción sobre Chromium
+node preview/pruebas.mjs        # 84 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
 
@@ -84,9 +84,9 @@ Los atajos no se disparan mientras se escribe un apunte.
 ## Las cinco vistas
 
 **Panorama.** La ruma del mes (el plan como regla graduada, el avance apilado
-por día hábil, la proyección en silueta), el tablero de mediciones, la lista
-de ataque, **el calendario de días hábiles**, la curva de avance y la
-recepción diaria.
+por día hábil, la proyección en silueta), la banda de diagnóstico, la lista de
+ataque, la **brecha contra el plan día a día**, la curva de avance, la
+recepción diaria y **quién cambió el ritmo**.
 
 **Proveedores.** Desvío contra el plan a la fecha, concentración de la brecha
 (Pareto) y el cruce mensual completo. Al hacer clic en una fila se abre la
@@ -174,6 +174,38 @@ planilla ya traía y nadie estaba mirando: `Material`, `Descripción`, `Predio`,
 - **Sin desglose.** Qué parte del volumen llega por el informe diario, que no
   trae material ni predio. Es la ceguera del mes, y conviene tenerla a la
   vista: el mix y los frentes solo pueden desglosar lo que viene de `Ingresos`.
+
+### Dos gráficos que reemplazaron al calendario
+
+El calendario de días hábiles se sacó: el comprador conoce sus días hábiles y
+no necesita que se los dibujen. El conteo sigue verificándose —en el aviso de
+arriba, que nombra el feriado descontado, y en `backend.mjs`— pero ya no ocupa
+un panel.
+
+**Brecha contra el plan, día a día.** La curva dibuja dos líneas y deja que el
+ojo mida la distancia entre ellas. Esto dibuja la distancia: positivo es
+adelanto, negativo atraso, y el cruce por cero queda marcado con su fecha. Es
+la misma información sin obligar a restar de memoria.
+
+El eje incluye siempre el cero pero **no se fuerza simétrico**: un mes que
+nunca estuvo adelantado desperdiciaba media altura en un tramo positivo vacío
+y la brecha se veía la mitad de profunda de lo que era.
+
+**Quién cambió el ritmo.** Los MR por día hábil de los últimos cinco días
+contra los cinco anteriores, en mancuerna: punto hueco donde estaba, sólido
+donde está. Responde algo que el desvío contra el plan no distingue: un
+proveedor muy atrasado que está subiendo no necesita el mismo llamado que uno
+que se está apagando, y por el desvío los dos se ven igual de mal.
+
+Quien venía de cero no subió 100%, **arrancó**; quien llegó a cero no bajó
+100%, **se detuvo**. El porcentaje ahí mentiría.
+
+**El par de colores está medido, no elegido a ojo.** El verde de la marca
+contra el rojo daba ΔE 5,7 en protanopia: un daltónico no los separa. Además
+es demasiado oscuro para un relleno grande. El par de los gráficos
+(`#00906c` / `#a82120`) pasa los seis controles del validador —ΔE 11,4 en
+deuteranopia, 29,2 en visión normal— y de todas formas el color solo refuerza:
+el lado del cero y la posición de los puntos ya dicen el signo.
 
 ## Homologación de proveedores (hoja `Homologacion`)
 
@@ -311,10 +343,16 @@ calendario de la faena:
   los excluya: un sábado de recuperación, un feriado con turno. Manda sobre
   todo lo demás y el calendario los marca como *recuperados*.
 
-**El conteo se puede revisar sin abrir el código.** La vista Panorama trae el
-calendario del mes: cada día con su motivo, el feriado tachado con su nombre,
-el día recuperado marcado y un recuadro en la fecha de corte. Es la forma de
-comprobar el prorrateo de un vistazo en vez de confiar en él.
+**El conteo se puede revisar sin abrir el código.** El aviso de arriba del
+tablero dice cuántos días hábiles tiene el mes, cuántos van, cuántos quedan y
+qué feriado se descontó, con su nombre y su fecha. El menú
+**MetroRuma Dashboard › Diagnosticar cruce de proveedores** agrega el detalle.
+
+Hubo un calendario dibujado en Panorama que mostraba día por día con su
+motivo. Se sacó: el comprador conoce sus días hábiles y el panel ocupaba un
+lugar que rinde más con otra cosa. El conteo, que es lo que importa, se sigue
+verificando en el aviso y en `preview/backend.mjs`, que comprueba cuatro
+septiembres distintos.
 
 `CONFIG.USAR_FERIADOS_CHILE` sigue existiendo: en `false` vuelve a contar solo
 lunes a viernes.
@@ -522,7 +560,7 @@ de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
 y el solsticio contra fechas oficiales conocidas, el orden de resolución de
 proveedores y la detección de duplicidad.
 
-`preview/pruebas.mjs` corre 76 comprobaciones de interacción sobre
+`preview/pruebas.mjs` corre 84 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
 guardar, informe semanal y memoria entre sesiones.
@@ -533,6 +571,12 @@ el calendario pinte una casilla por día y que la suma de días hábiles del
 calendario cuadre con el total que usa el prorrateo. Sobre la vista forestal,
 que el mix cuadre exactamente con lo que vino de `Ingresos` y que las
 participaciones sumen 100%.
+
+De los dos gráficos nuevos se comprueba el dato, no solo que se dibujen: que
+la brecha del último día sea exactamente el acumulado menos el plan a esa
+fecha, que haya un punto por día hábil corrido, que el acumulado llegue al
+total del mes, y que la mancuerna ordene por magnitud del cambio y descarte a
+quien no movió nada en ninguna de las dos ventanas.
 
 De la pasada de diseño se comprueba que la banda de diagnóstico no repita
 ninguna cifra de la lectura de la ruma y que la jerarquía tipográfica siga en
