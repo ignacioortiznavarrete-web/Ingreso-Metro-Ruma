@@ -274,15 +274,34 @@ lunes a viernes.
 
 ## Decisiones de diseño
 
-**El verde no es color de marca.** En esta operación el verde es un *dato*: el
-estatus VERDE del informe y el proveedor sobre plan. Usarlo también como color
-corporativo hacía ilegible el semáforo. La marca es el azul acero de la
-maquinaria y del libro de pesaje; el naranja de alta visibilidad —el mismo de
-la pintura en la cabeza de los trozos— marca solo lo que exige acción.
+**La marca es verde bosque oscuro, y el verde también es un dato.** Las dos
+cosas a la vez, que es el problema a resolver. El estatus VERDE del informe y
+el proveedor sobre plan son verdes que significan algo; si la marca usa el
+mismo verde, el semáforo deja de leerse. Se separan por **saturación**, no por
+tono:
 
-**La escala de desempeño es divergente**, del azul (sobre plan) al rojo (bajo
-plan crítico), con el naranja como aviso. Es la codificación que un comprador
-necesita: por encima o por debajo, y cuánto.
+| | Croma | Papel |
+|---|---|---|
+| Marca (estructura) | 0,058 | verde bosque apagado: riel, cifras, estratos de la ruma |
+| Semáforo (señal) | 0,140 | verde pasto saturado: el estatus que declara el proveedor |
+
+2,6 veces de diferencia en saturación es lo que hace que una sea superficie y
+la otra aviso. Y el semáforo nunca se identifica solo por color: siempre lleva
+su palabra al lado ("Verde", "Rojo") o su leyenda.
+
+Esta versión partió del azul acero por ese riesgo. El verde oscuro es una
+decisión posterior del comprador, y se sostiene: el par verde bosque + naranja
+de alta visibilidad es el de la faena —el chaleco, la pintura en la cabeza del
+trozo— y no el de un tablero corporativo cualquiera. Los neutros llevan un
+asomo del mismo verde (croma 0,005 a 0,017) para que el gris no pelee con la
+marca; nada de la banda cálida donde vive el beige de moda.
+
+**La escala de desempeño es divergente**, del verde (sobre plan) al rojo (bajo
+plan crítico), con el naranja como aviso. Con la marca en verde la rampa quedó
+en el orden que un comprador ya espera leer, que antes había que aprender.
+
+**El aviso informativo es neutro, no verde.** Explica de dónde sale el dato, no
+da un visto bueno. Teñirlo de marca lo hacía leer como aprobación.
 
 **Un solo instrumento en vez de doce tarjetas.** Las mediciones viven en una
 superficie dividida por filetes de 1px. La ruma es el elemento firma: el plan
@@ -305,8 +324,9 @@ Charts. Solo quedan las dos familias tipográficas de Google Fonts.
 
 ## Accesibilidad y robustez
 
-- Todos los pares de color pasan 4,5:1 (el gris apagado se oscureció hasta
-  4,98:1 sobre el fondo de página).
+- Todos los pares de color pasan 4,5:1, medido sobre cada nodo de texto de
+  las cinco vistas y no sobre una muestra (el gris apagado da 5,71:1 sobre el
+  panel y 4,73:1 sobre la superficie hundida, que es el par más justo).
 - La ficha lateral es un diálogo modal de verdad: atrapa el tabulador, se
   cierra con `Esc` y devuelve el foco al botón que la abrió.
 - Los nombres de proveedor son botones, no filas de tabla: se llega con el
@@ -320,10 +340,16 @@ Charts. Solo quedan las dos familias tipográficas de Google Fonts.
 
 ## Pasada de diseño
 
-Revisión con las skills `impeccable` y `frontend-design`. La paleta, la
-tipografía y la ruma no se tocaron: el sistema visual estaba decidido y
-documentado, y la identidad manda sobre el gusto de una pasada. Lo que se
-arregló es lo que no estaba a la altura de ese sistema.
+Revisión con las skills `impeccable` y `frontend-design`. La tipografía y la
+ruma no se tocaron: el sistema visual estaba decidido y documentado, y la
+identidad manda sobre el gusto de una pasada. Lo que se arregló es lo que no
+estaba a la altura de ese sistema.
+
+La paleta cambió después y por otra razón: el comprador pidió verde oscuro.
+Eso es una decisión suya sobre su propia marca, no un criterio de la pasada
+—ver *Decisiones de diseño*, donde está cómo se resolvió la colisión con el
+verde del semáforo—. El resto de esta sección es anterior al cambio de color
+y vale igual: ninguno de los arreglos dependía del tono.
 
 **La pantalla decía dos veces lo mismo.** La lectura de la ruma y la banda
 de mediciones traían las mismas cuatro cifras —27.907, −8.813, 32.558 y
@@ -429,6 +455,12 @@ participaciones sumen 100%.
 De la pasada de diseño se comprueba que la banda de diagnóstico no repita
 ninguna cifra de la lectura de la ruma y que la jerarquía tipográfica siga en
 el orden correcto (la lectura de la ruma por sobre la banda).
+
+El contraste se mide sobre **cada nodo de texto de las cinco vistas**, no
+sobre una lista de selectores elegidos a mano: se resuelve el `oklch()` a
+sRGB, se compone la transparencia contra el fondo real y se exige 4,5:1 (3:1
+en texto grande). Así apareció la insignia naranja del riel, que llevaba
+tiempo en 3,42:1 y ninguna revisión por muestreo había visto.
 
 También se comprueba que no haya desbordamiento horizontal en 1600 px, 1280 px
 ni 390 px, recorriendo las cinco vistas en cada ancho.

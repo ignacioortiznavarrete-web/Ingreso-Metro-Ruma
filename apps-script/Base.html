@@ -23,20 +23,24 @@ var GAP_MODE = 'abs';
 var PICKED = null;
 var BUSY = false;
 
+/* Espejo de los tokens de Estilos para los gráficos SVG, que se pintan
+   con atributos y no heredan las variables CSS. Si cambia un token allá,
+   cambia aquí. */
 var PALETTE = {
-  brand: '#24395e',
-  brand2: '#3a5c8c',
-  brand3: '#7d9bc2',
-  hiviz: '#e2600f',
-  hivizInk: '#9c400a',
-  crit: '#a81f14',
-  ink: '#191e26',
-  ink2: '#47515f',
-  ink3: '#606a78',
-  line: '#dbe1e9',
-  line2: '#c2cbd6',
-  sunk: '#e9edf2',
-  wash: '#eaeff6'
+  brand: '#153c27',
+  brand2: '#2e6244',
+  brand3: '#739e83',
+  brandInk: '#143623',
+  hiviz: '#e26605',
+  hivizInk: '#934003',
+  crit: '#a82120',
+  ink: '#1b221f',
+  ink2: '#47514c',
+  ink3: '#5e6963',
+  line: '#d9dfdc',
+  line2: '#bfcac4',
+  sunk: '#e5ebe8',
+  wash: '#e4f1e8'
 };
 
 /* Umbrales de clasificación sobre el cumplimiento a la fecha. */

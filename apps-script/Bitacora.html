@@ -62,13 +62,16 @@ function heatColor(compliance) {
     return null;
   }
 
-  if (compliance >= 1.30) { return ['#1b2c4a', '#ffffff']; }
-  if (compliance >= 1.15) { return ['#24395e', '#ffffff']; }
-  if (compliance >= 1.05) { return ['#4d719f', '#ffffff']; }
-  if (compliance >= 0.95) { return ['#bcd0e6', '#1c3358']; }
-  if (compliance >= 0.85) { return ['#f7c9a4', '#7a3208']; }
-  if (compliance >= 0.70) { return ['#ec8f4a', '#3d1802']; }
-  return ['#b0301f', '#ffffff'];
+  // Rampa divergente: verde sobre plan, naranja aviso, rojo bajo plan.
+  // Cada par es [fondo, texto] y todos pasan 4,5:1 (el más justo, la
+  // casilla naranja, da 5,05:1).
+  if (compliance >= 1.30) { return ['#092a19', '#ffffff']; }
+  if (compliance >= 1.15) { return ['#153c27', '#ffffff']; }
+  if (compliance >= 1.05) { return ['#36674b', '#ffffff']; }
+  if (compliance >= 0.95) { return ['#b3d6c0', '#143623']; }
+  if (compliance >= 0.85) { return ['#f3c5a3', '#7b3606']; }
+  if (compliance >= 0.70) { return ['#e6803a', '#511900']; }
+  return ['#a51f1e', '#ffffff'];
 }
 
 function renderHeatmap() {
@@ -146,12 +149,12 @@ function renderHeatmap() {
   bindTips(host);
 
   id('heatScale').innerHTML = [
-    ['#b0301f', 'menos de 70%'],
-    ['#ec8f4a', '70 a 85%'],
-    ['#f7c9a4', '85 a 95%'],
-    ['#bcd0e6', 'en línea'],
-    ['#4d719f', '105 a 115%'],
-    ['#24395e', 'sobre 115%']
+    ['#a51f1e', 'menos de 70%'],
+    ['#e6803a', '70 a 85%'],
+    ['#f3c5a3', '85 a 95%'],
+    ['#b3d6c0', 'en línea'],
+    ['#36674b', '105 a 115%'],
+    ['#153c27', 'sobre 115%']
   ].map(function(pair) {
     return '<span class="heat-scale-chip">' +
       '<span class="heat-scale-swatch" style="background:' + pair[0] +

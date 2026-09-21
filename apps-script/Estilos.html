@@ -17,64 +17,80 @@
  * ===================================================================== */
 
 :root {
-  /* Superficies */
-  --paper: #f2f4f7;
-  --paper: oklch(0.962 0.005 254);
+  /* Superficies. Los neutros llevan el tinte de la marca —un asomo de
+     verde, 0,005 a 0,014 de croma— para que el gris no pelee con ella.
+     Nada de la banda cálida (tono 40-100): ahí vive el beige de moda. */
+  --paper: #f0f3f1;
+  --paper: oklch(0.962 0.005 162);
   --panel: #ffffff;
-  --panel-sunk: #e9edf2;
-  --panel-sunk: oklch(0.935 0.008 254);
+  --panel-sunk: #e5ebe8;
+  --panel-sunk: oklch(0.935 0.008 162);
 
   /* Tinta */
-  --ink: #191e26;
-  --ink: oklch(0.245 0.012 258);
-  --ink-2: #47515f;
-  --ink-2: oklch(0.425 0.018 258);
-  /* 4,98:1 sobre el papel y 4,66:1 sobre la superficie hundida: el gris
-     apagado sigue siendo legible en las tres superficies. */
-  --ink-3: #606a78;
-  --ink-3: oklch(0.510 0.018 258);
+  --ink: #1b221f;
+  --ink: oklch(0.245 0.013 162);
+  --ink-2: #47514c;
+  --ink-2: oklch(0.425 0.017 162);
+  /* 5,71:1 sobre el panel, 5,11:1 sobre el papel y 4,73:1 sobre la
+     superficie hundida: el gris apagado es legible en las tres. */
+  --ink-3: #5e6963;
+  --ink-3: oklch(0.510 0.017 162);
 
   /* Trazos */
-  --line: #dbe1e9;
-  --line: oklch(0.898 0.008 254);
-  --line-2: #c2cbd6;
-  --line-2: oklch(0.828 0.014 254);
+  --line: #d9dfdc;
+  --line: oklch(0.898 0.008 162);
+  --line-2: #bfcac4;
+  --line-2: oklch(0.828 0.014 162);
 
-  /* Marca: azul acero */
-  --brand: #24395e;
-  --brand: oklch(0.335 0.062 262);
-  --brand-2: #3a5c8c;
-  --brand-2: oklch(0.462 0.078 262);
-  --brand-3: #7d9bc2;
-  --brand-3: oklch(0.665 0.058 258);
-  --brand-wash: #eaeff6;
-  --brand-wash: oklch(0.945 0.014 258);
+  /* Marca: verde bosque oscuro.
+     Va apagada a propósito (croma 0,058). El verde de esta operación es
+     también un dato —el estatus VERDE del informe—, así que la marca y la
+     señal no pueden confundirse. Se separan por saturación: la marca es
+     color de estructura, el semáforo es color de señal y va 2,6 veces más
+     saturado. Blanco sobre la marca da 12,30:1. */
+  --brand: #153c27;
+  --brand: oklch(0.320 0.058 157);
+  --brand-2: #2e6244;
+  --brand-2: oklch(0.450 0.074 157);
+  --brand-3: #739e83;
+  --brand-3: oklch(0.660 0.062 157);
+  --brand-wash: #e4f1e8;
+  --brand-wash: oklch(0.945 0.018 157);
+  /* Tinta de marca para texto sobre --brand-wash: 11,41:1 */
+  --brand-ink: #143623;
+  --brand-ink: oklch(0.300 0.052 157);
 
-  /* Alta visibilidad: exige acción */
-  --hiviz: #e2600f;
+  /* Alta visibilidad: exige acción. El naranja del chaleco y de la pintura
+     en la cabeza del trozo, que contra el verde bosque es el par natural
+     de esta faena. */
+  --hiviz: #e26605;
   --hiviz: oklch(0.652 0.176 48);
-  --hiviz-ink: #9c400a;
+  --hiviz-ink: #934003;
   --hiviz-ink: oklch(0.475 0.128 48);
   --hiviz-wash: #fdeee2;
   --hiviz-wash: oklch(0.955 0.024 55);
 
-  /* Rampa divergente de desempeño */
-  --sev-over: #24395e;
-  --sev-ok: #7d9bc2;
-  --sev-warn: #e2600f;
-  --sev-crit: #a81f14;
+  /* Rampa divergente de desempeño: verde sobre plan, naranja aviso, rojo
+     bajo plan crítico. Con la marca en verde la rampa quedó en el orden
+     que un comprador ya espera leer. */
+  --sev-over: #153c27;
+  --sev-ok: #739e83;
+  --sev-warn: #e26605;
+  --sev-crit: #a82120;
   --sev-crit: oklch(0.478 0.171 27);
 
-  /* Estatus del informe Gmail (dato, no decoración) */
-  --st-verde: #1c7a4c;
-  --st-verde: oklch(0.522 0.121 158);
-  --st-ambar: #9a6800;
+  /* Estatus del informe Gmail (dato, no decoración). Saturados y en tono
+     pasto (148), no bosque: es la señal, no la estructura. */
+  --st-verde: #0c7830;
+  --st-verde: oklch(0.500 0.140 148);
+  --st-ambar: #946600;
   --st-ambar: oklch(0.545 0.115 78);
-  --st-rojo: #b0231a;
+  --st-rojo: #a51f1e;
+  --st-rojo: oklch(0.470 0.170 27);
 
   /* Procedencia del dato */
-  --real: #24395e;
-  --gmail: #7d9bc2;
+  --real: #153c27;
+  --gmail: #739e83;
 
   /* Tipografía */
   --sans: 'Archivo', ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
@@ -89,7 +105,7 @@
   --rail: 96px;
 
   /* Elevación: sombras teñidas al fondo, nunca junto a borde grueso */
-  --lift-1: 0 1px 2px rgba(24, 39, 66, .05);
+  --lift-1: 0 1px 2px rgba(21, 60, 39, .06);
 
   /* Curvas: solo salidas exponenciales, sin rebote */
   --out-quint: cubic-bezier(.22, 1, .36, 1);
@@ -245,7 +261,10 @@ h1, h2, h3, p { margin: 0; }
   font-weight: 700;
   line-height: 14px;
   text-align: center;
-  color: #fff;
+  /* Tinta oscura sobre la naranja, no blanco: en 9 px el blanco daba
+     3,42:1. Así la insignia conserva el punch de alta visibilidad contra
+     el riel verde y además se lee (4,74:1). */
+  color: var(--ink);
   background: var(--hiviz);
   border-radius: 8px;
 }
@@ -282,7 +301,7 @@ h1, h2, h3, p { margin: 0; }
   align-items: center;
   gap: 10px 18px;
   padding: 11px 20px;
-  background: rgba(242, 244, 247, .93);
+  background: rgba(240, 243, 241, .93);
   border-bottom: 1px solid var(--line);
   backdrop-filter: blur(8px);
 }
@@ -459,10 +478,13 @@ h1, h2, h3, p { margin: 0; }
 .notice-body { min-width: 0; }
 .notice[hidden] { display: none; }
 
+/* Neutro, no verde: en este tablero el verde significa "en plan", y este
+   aviso solo explica de dónde sale el dato. Teñirlo de marca lo hacía
+   leer como un visto bueno. */
 .notice-info {
   color: var(--ink-2);
-  background: var(--brand-wash);
-  border-color: #cfdcec;
+  background: var(--panel-sunk);
+  border-color: var(--line-2);
 }
 
 .notice-info svg { color: var(--brand-2); }
@@ -708,7 +730,7 @@ h1, h2, h3, p { margin: 0; }
   transition: background-color .18s var(--out-quart);
 }
 
-.gauge:hover { background: #fbfcfd; }
+.gauge:hover { background: #f9fcfa; }
 
 .gauge-key {
   display: flex;
@@ -786,9 +808,9 @@ h1, h2, h3, p { margin: 0; }
   font-size: 11px;
   color: #fff;
   pointer-events: none;
-  background: #10151d;
+  background: #111c17;
   border-radius: var(--radius-sm);
-  box-shadow: 0 10px 26px -8px rgba(10, 16, 26, .5);
+  box-shadow: 0 10px 26px -8px rgba(17, 28, 23, .5);
   opacity: 0;
   transform: translateY(3px);
   transition: opacity .12s var(--out-quart), transform .12s var(--out-quart);
@@ -975,19 +997,19 @@ h1, h2, h3, p { margin: 0; }
   border-radius: 3px;
 }
 
-.tag-real { color: #1c3358; background: var(--brand-wash); }
+.tag-real { color: var(--brand-ink); background: var(--brand-wash); }
 
 .tag-gmail {
-  color: #3d5a80;
+  color: #3a614a;
   background:
     repeating-linear-gradient(
       -45deg,
-      rgba(125, 155, 194, .28) 0 3px,
-      rgba(125, 155, 194, .08) 3px 6px
+      rgba(115, 158, 131, .30) 0 3px,
+      rgba(115, 158, 131, .10) 3px 6px
     );
 }
 
-.tag-over { color: #1c3358; background: var(--brand-wash); }
+.tag-over { color: var(--brand-ink); background: var(--brand-wash); }
 .tag-ok { color: var(--ink-2); background: var(--panel-sunk); }
 .tag-warn { color: var(--hiviz-ink); background: var(--hiviz-wash); }
 .tag-crit { color: #8a1c14; background: #fdeceb; }
@@ -1330,7 +1352,7 @@ h1, h2, h3, p { margin: 0; }
   position: fixed;
   inset: 0;
   z-index: var(--z-drawer);
-  background: rgba(20, 28, 40, .34);
+  background: rgba(21, 60, 39, .34);
   animation: fade-in .2s var(--out-quart) both;
 }
 
@@ -1345,7 +1367,7 @@ h1, h2, h3, p { margin: 0; }
   width: min(440px, 100%);
   background: var(--panel);
   border-left: 1px solid var(--line);
-  box-shadow: -20px 0 48px -22px rgba(20, 30, 48, .4);
+  box-shadow: -20px 0 48px -22px rgba(21, 60, 39, .4);
   animation: drawer-in .34s var(--out-expo) both;
 }
 
@@ -1644,7 +1666,7 @@ h1, h2, h3, p { margin: 0; }
   border-radius: 3px;
 }
 
-.zone.is-safe { color: #1c3358; background: var(--brand-wash); }
+.zone.is-safe { color: var(--brand-ink); background: var(--brand-wash); }
 .zone.is-nudge { color: var(--ink-2); background: var(--panel-sunk); }
 .zone.is-push { color: var(--hiviz-ink); background: var(--hiviz-wash); }
 .zone.is-replace { color: #8a1c14; background: #fdeceb; }
