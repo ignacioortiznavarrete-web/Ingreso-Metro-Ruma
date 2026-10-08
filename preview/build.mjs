@@ -107,6 +107,13 @@ function monthWindow(prefix) {
   };
 }
 
+function shiftPrefix(prefix, back) {
+  const [year, month] = prefix.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1 - back, 1));
+
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
 function isoWeek(dateKey) {
   const [y, m, d] = dateKey.split('-').map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
@@ -126,6 +133,9 @@ const rnd = () => {
 
 function build(prefix, referenceDate) {
   const month = monthWindow(prefix);
+  // Los dos meses anteriores al consultado llegan cerrados: es el caso real
+  // de quien cierra el mes al terminarlo y arranca el siguiente en blanco.
+  const CERRADOS = [shiftPrefix(prefix, 2), shiftPrefix(prefix, 1)];
   const workdayKeys = [];
   const workdaysByWeek = {};
   const discounted = [];
@@ -255,10 +265,13 @@ function build(prefix, referenceDate) {
     month, isCurrentMonth: true,
     // El mes consultado va primero: si no está en la lista, el selector
     // aparece vacío y parece roto.
-    availableMonths: Array.from({ length: 4 }, (unused, back) => {
-      const date = new Date(Date.UTC(month.year, month.month - 1 - back, 1));
-      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-    }).map((p) => ({ prefix: p, label: monthWindow(p).label })),
+    availableMonths: Array.from({ length: 4 }, (unused, back) =>
+      shiftPrefix(prefix, back)
+    ).map((p) => ({
+      prefix: p,
+      label: monthWindow(p).label,
+      closed: CERRADOS.indexOf(p) >= 0
+    })),
     workdays: {
       todayKey: today,
       referenceDate,
@@ -328,6 +341,55 @@ function build(prefix, referenceDate) {
     })),
     rows,
     apuntes: [],
+    // Dos meses ya cerrados, para que la vista Histórico tenga qué mostrar.
+    historico: (() => {
+      const byProvider = {};
+
+      const meses = CERRADOS.map((p, index) => {
+        const w = monthWindow(p);
+        // El primero cierra bajo plan y el segundo sobre plan, para que la
+        // vista tenga que pintar las dos orillas del cumplimiento.
+        const f = index === 0 ? 0.88 : 1.03;
+        let plan = 0;
+        let total = 0;
+
+        PROVIDERS.forEach(([provider, planMes, rate]) => {
+          const recibido = Math.round(planMes * f * (0.75 + rate * 0.3) * 10) / 10;
+
+          plan += planMes;
+          total += recibido;
+
+          if (!byProvider[provider]) { byProvider[provider] = {}; }
+
+          byProvider[provider][p] = {
+            plan: planMes,
+            total: recibido,
+            compliance: Math.round((recibido / planMes) * 10000) / 10000
+          };
+        });
+
+        return {
+          prefix: p,
+          label: w.label,
+          plan: Math.round(plan * 10) / 10,
+          actual: Math.round(total * 0.82 * 10) / 10,
+          gmail: Math.round(total * 0.18 * 10) / 10,
+          total: Math.round(total * 10) / 10,
+          compliance: Math.round((total / plan) * 10000) / 10000,
+          providers: PROVIDERS.length,
+          workdays: 22,
+          closed: true
+        };
+      });
+
+      return {
+        months: meses,
+        prefixes: CERRADOS.slice(),
+        providers: byProvider,
+        currentPrefix: prefix
+      };
+    })(),
+    monthClosed: false,
     homologacion: [
       {
         origin: 'AGRICOLA Y FORESTAL DIGUA SPA',

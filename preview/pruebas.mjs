@@ -232,7 +232,7 @@ ok('arma el informe', reportOk.includes('INFORME SEMANAL') && reportOk.includes(
    reportOk.split('\n').length + ' líneas');
 
 // Detalle: orden y ver todo
-await q.keyboard.press('5'); await q.waitForTimeout(600);
+await q.keyboard.press('6'); await q.waitForTimeout(600);
 const before = await q.locator('#detailBody tr').count();
 await q.click('#detailTable th[data-sort="cantidad"]'); await q.waitForTimeout(400);
 const cells = await q.$$eval('#detailBody tr td:nth-child(8)', ns =>
@@ -406,8 +406,73 @@ ok('la tabla forestal abre la ficha',
    await q.locator('.drawer').count() > 0);
 await q.keyboard.press('Escape'); await q.waitForTimeout(300);
 
+/* ============ vista historico ============ */
+await q.keyboard.press('5'); await q.waitForTimeout(900);
+
+ok('los meses cerrados se ven',
+   await q.locator('#historicoEmpty').isHidden());
+ok('mediciones del historico',
+   await q.locator('#gaugesHistorico .gauge').count() === 6,
+   (await q.locator('#gaugesHistorico .gauge').count()) + ' mediciones');
+ok('plan contra recibido por mes',
+   await q.locator('#chartHistMes rect.bar-grow').count() === 4,
+   (await q.locator('#chartHistMes rect.bar-grow').count()) + ' columnas');
+ok('un punto de cumplimiento por mes',
+   await q.locator('#chartHistCumpl circle.blip').count() === 2,
+   (await q.locator('#chartHistCumpl circle.blip').count()) + ' puntos');
+ok('una fila por proveedor',
+   await q.locator('#histBody tr').count() === 22,
+   (await q.locator('#histBody tr').count()) + ' filas');
+// Proveedor + un mes cerrado por columna + plan, recibido y cumplimiento.
+ok('la cabecera trae una columna por mes',
+   await q.locator('#histHead th').count() === 6,
+   (await q.locator('#histHead th').count()) + ' columnas');
+ok('el conteo cuadra con la tabla',
+   (await q.locator('#histCount').innerText()).startsWith('22'),
+   await q.locator('#histCount').innerText());
+
+// Los totales de la tabla tienen que cuadrar con los meses cerrados: es el
+// numero que el comprador usa para negociar el plan del mes que viene.
+const historia = await q.evaluate(() => {
+  const hist = DATA.historico;
+  const meses = hist.months;
+  const porMes = meses.reduce((sum, m) => sum + m.total, 0);
+  let porProveedor = 0;
+
+  Object.keys(hist.providers).forEach((name) => {
+    meses.forEach((m) => {
+      const cell = hist.providers[name][m.prefix];
+      if (cell) { porProveedor += cell.total; }
+    });
+  });
+
+  return {
+    meses: meses.length,
+    porMes: Math.round(porMes),
+    porProveedor: Math.round(porProveedor),
+    cerrados: meses.every((m) => m.closed),
+    ordenados: meses.every((m, i) => i === 0 || meses[i - 1].prefix < m.prefix),
+    cumplimiento: meses.every((m) =>
+      Math.abs(m.compliance - m.total / m.plan) < 0.0001)
+  };
+});
+
+ok('el total por mes cuadra con el total por proveedor',
+   historia.porMes === historia.porProveedor,
+   `${historia.porMes} vs ${historia.porProveedor}`);
+ok('todos los meses vienen cerrados', historia.cerrados);
+ok('los meses van del mas viejo al mas nuevo', historia.ordenados);
+ok('el cumplimiento es recibido sobre plan', historia.cumplimiento);
+
+// La ficha del proveedor se abre tambien desde el historico.
+await q.locator('#histBody .linkish').first().click();
+await q.waitForTimeout(500);
+ok('el historico abre la ficha',
+   await q.locator('.drawer').count() > 0);
+await q.keyboard.press('Escape'); await q.waitForTimeout(300);
+
 /* ============ homologacion desde el tablero ============ */
-await q.keyboard.press('5'); await q.waitForTimeout(800);
+await q.keyboard.press('6'); await q.waitForTimeout(800);
 
 ok('lista los proveedores sin homologar',
    await q.locator('.alias').count() === 2,
@@ -467,7 +532,8 @@ for (const width of [1600, 1280, 390]) {
 
   let worst = 0;
 
-  for (const view of ['panorama', 'proveedores', 'forestal', 'semana', 'detalle']) {
+  for (const view of ['panorama', 'proveedores', 'forestal', 'semana',
+                      'historico', 'detalle']) {
     await page.click('#tab-' + view); await page.waitForTimeout(450);
     const over = await page.evaluate(() =>
       document.documentElement.scrollWidth - document.documentElement.clientWidth);

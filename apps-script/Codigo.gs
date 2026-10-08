@@ -29,6 +29,7 @@ const CONFIG = Object.freeze({
   SHEET_GMAIL: 'Informegmail',
   SHEET_APUNTES: 'Apuntes',
   SHEET_HOMOLOGACION: 'Homologacion',
+  SHEET_HISTORICO: 'Historico',
   HTML_FILE: 'Index',
   TIMEZONE: 'America/Santiago',
 
@@ -289,6 +290,19 @@ const GMAIL_HEADERS = Object.freeze([
   'Score coincidencia'
 ]);
 
+const HISTORICO_HEADERS = Object.freeze([
+  'Mes',
+  'Proveedor',
+  'Plan',
+  'Ingreso real',
+  'Complemento Gmail',
+  'Total',
+  'Cumplimiento',
+  'Días hábiles',
+  'Cerrado por',
+  'Cerrado'
+]);
+
 const HOMOLOGACION_HEADERS = Object.freeze([
   'Nombre en origen',
   'Proveedor del Plan',
@@ -334,6 +348,7 @@ function onOpen() {
     .addItem('Instalar automatización Gmail', 'instalarDisparadorGmail')
     .addItem('Eliminar automatización Gmail', 'eliminarDisparadoresGmail')
     .addSeparator()
+    .addItem('Cerrar el mes anterior', 'cerrarMesAnterior')
     .addItem('Equivalencias de proveedor', 'abrirHomologacion')
     .addItem('Diagnosticar cruce de proveedores', 'diagnosticarCruceProveedores')
     .addToUi();
@@ -378,7 +393,14 @@ function include(filename) {
  * @param {string=} monthPrefix Mes a consultar en formato 'yyyy-MM'.
  *   Si se omite se usa el mes vigente.
  */
-function getDashboardData(monthPrefix) {
+/**
+ * @param {string} monthPrefix  'yyyy-MM' a consultar
+ * @param {Object} options      skipHistorico evita releer el histórico
+ *                              cuando ya se está cerrando un mes
+ */
+function getDashboardData(monthPrefix, options) {
+  options = options || {};
+
   const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
   const timezone = spreadsheet.getSpreadsheetTimeZone() || CONFIG.TIMEZONE;
 
@@ -386,6 +408,10 @@ function getDashboardData(monthPrefix) {
   const month = buildMonthWindow_(
     /^\d{4}-\d{2}$/.test(String(monthPrefix || '')) ? monthPrefix : currentPrefix
   );
+
+  const historico = options.skipHistorico
+    ? { months: {}, rows: [] }
+    : readHistorico_(spreadsheet);
 
   // Una sola lectura de la tabla de equivalencias para todo el cruce.
   const homologacion = readHomologacion_(spreadsheet);
@@ -435,7 +461,11 @@ function getDashboardData(monthPrefix) {
     user: getActiveUserLabel_(),
     month: month,
     isCurrentMonth: month.prefix === currentPrefix,
-    availableMonths: planResult.months,
+    availableMonths: mergeAvailableMonths_(
+      planResult.months, historico.months, month, currentPrefix
+    ),
+    historico: buildHistoricoSeries_(historico, currentPrefix),
+    monthClosed: Boolean(historico.months[month.prefix]),
     workdays: workdays,
     factor: CONFIG.FACTOR_CUMPLIMIENTO,
     source: {
@@ -879,6 +909,53 @@ function parseMonthHeader_(value) {
  * LECTURA DE INGRESOS REALES
  * ===================================================================== */
 
+/* Fila vacía compartida: evita crear un arreglo por fila cuando no hay
+   valores formateados que mirar. Nunca se escribe. */
+const EMPTY_ROW = Object.freeze([]);
+
+/**
+ * Valores formateados, pero solo si alguna fila los necesita y solo de
+ * las columnas que importan.
+ *
+ * getDisplayValues() formatea celda por celda. Pedirlo sobre la hoja
+ * entera en cada carga era barato con un mes y se volvía insostenible al
+ * acumular meses: es lo que colgaba el tablero.
+ *
+ * Devuelve null cuando ninguna fila lo necesita, que es el caso normal.
+ * Si hace falta, devuelve filas del mismo ancho que las de valores, con
+ * huecos fuera de las columnas pedidas, para que los índices del resto
+ * del código sigan valiendo.
+ *
+ * @param {Array<number>} indexes  columnas base cero que pueden hacer falta
+ * @param {function} needs         decide, por fila de valores, si hace falta
+ */
+function readDisplayFallback_(sheet, values, lastRow, width, indexes, needs) {
+  let required = false;
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
+    if (needs(values[rowIndex])) { required = true; break; }
+  }
+
+  if (!required) { return null; }
+
+  const first = Math.min.apply(null, indexes);
+  const span = Math.max.apply(null, indexes) - first + 1;
+
+  const block = sheet
+    .getRange(1, first + 1, lastRow, Math.min(span, width - first))
+    .getDisplayValues();
+
+  return block.map(function(row) {
+    const full = new Array(width);
+
+    indexes.forEach(function(index) {
+      full[index] = row[index - first];
+    });
+
+    return full;
+  });
+}
+
 function readIngresos_(spreadsheet, timezone, month, planCandidates, aliases) {
   const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_INGRESOS);
 
@@ -886,23 +963,49 @@ function readIngresos_(spreadsheet, timezone, month, planCandidates, aliases) {
     throw new Error('No existe la hoja "' + CONFIG.SHEET_INGRESOS + '".');
   }
 
-  const range = sheet.getDataRange();
-  const values = range.getValues();
-  const displayed = range.getDisplayValues();
+  const columns = CONFIG.INGRESOS_COLUMNS;
+  const lastRow = sheet.getLastRow();
 
-  if (!values.length) {
+  if (lastRow < 2) {
     return { rows: [] };
   }
 
+  // Solo las columnas que se usan, hasta Q. getDataRange() traía además
+  // todo lo que SAP exporta a la derecha y nadie lee.
+  const width = Math.max(
+    columns.MATERIAL, columns.DESCRIPCION_MATERIAL, columns.FECHA_CONTABLE,
+    columns.CANTIDAD, columns.UM, columns.DESCRIPCION_PROVEEDOR,
+    columns.ROL, columns.PREDIO
+  ) + 1;
+
+  const values = sheet.getRange(1, 1, lastRow, width).getValues();
+
   validateIngresosHeaders_(values[0]);
 
-  const columns = CONFIG.INGRESOS_COLUMNS;
+  // getDisplayValues() formatea celda por celda, y antes se pedía sobre
+  // la hoja entera en cada carga: al acumular meses el tablero se quedaba
+  // girando hasta que Apps Script cortaba la ejecución a los seis
+  // minutos, sin avisarle al navegador.
+  //
+  // Casi nunca hace falta: toDateKey_ y toNumber_ solo miran el valor
+  // formateado cuando el crudo no sirve, y un export de SAP trae fechas
+  // y cantidades de verdad. Así que se mira primero si alguna fila lo
+  // necesita, y recién ahí se piden, y solo de esas dos columnas.
+  const displayed = readDisplayFallback_(
+    sheet, values, lastRow, width,
+    [columns.FECHA_CONTABLE, columns.CANTIDAD],
+    function(row) {
+      return !(row[columns.FECHA_CONTABLE] instanceof Date) ||
+        !isFinite(Number(row[columns.CANTIDAD]));
+    }
+  );
+
   const cache = {};
   const rows = [];
 
   for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
     const row = values[rowIndex];
-    const displayRow = displayed[rowIndex] || [];
+    const displayRow = (displayed && displayed[rowIndex]) || EMPTY_ROW;
 
     const dateKey = toDateKey_(
       row[columns.FECHA_CONTABLE],
@@ -1651,9 +1754,9 @@ function readGmailProviderRows_(
     return { rows: [], audit: { reports: 0, providers: 0 } };
   }
 
-  const range = sheet.getDataRange();
-  const values = range.getValues();
-  const displayed = range.getDisplayValues();
+  const lastRow = sheet.getLastRow();
+  const width = GMAIL_HEADERS.length;
+  const values = sheet.getRange(1, 1, lastRow, width).getValues();
   const headerMap = buildHeaderMap_(values[0]);
 
   const required = [
@@ -1683,24 +1786,38 @@ function readGmailProviderRows_(
     };
   }
 
+  // Esta hoja la escribe el propio script con fechas y números de verdad,
+  // así que el valor formateado no hace falta. Se pide igual si alguna
+  // fila quedó como texto, por ejemplo si alguien la editó a mano.
+  const isoIndex = headerMap['fecha iso'];
+  const reportIndex = headerMap['fecha informe'];
+
+  const displayed = readDisplayFallback_(
+    sheet, values, lastRow, width,
+    [isoIndex, reportIndex],
+    function(row) {
+      return !parseDateText_(row[isoIndex]) &&
+        !(row[reportIndex] instanceof Date);
+    }
+  );
+
   const messagesByDate = {};
 
   for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
     const row = values[rowIndex];
-    const displayRow = displayed[rowIndex] || [];
+    const displayRow = (displayed && displayed[rowIndex]) || EMPTY_ROW;
     const state = text_(row[headerMap['estado']]);
 
     if (state !== 'OK') {
       continue;
     }
 
+    // El crudo primero: la columna ya guarda 'yyyy-MM-dd'. Antes se
+    // miraba solo el formateado, que es justo lo caro de obtener.
     const dateKey =
-      parseDateText_(displayRow[headerMap['fecha iso']]) ||
-      toDateKey_(
-        row[headerMap['fecha informe']],
-        displayRow[headerMap['fecha informe']],
-        timezone
-      );
+      parseDateText_(row[isoIndex]) ||
+      parseDateText_(displayRow[isoIndex]) ||
+      toDateKey_(row[reportIndex], displayRow[reportIndex], timezone);
 
     if (!dateKey || dateKey.indexOf(month.prefix + '-') !== 0) {
       continue;
@@ -2149,6 +2266,369 @@ function formatApuntesSheet_(sheet) {
 /* =====================================================================
  * HOMOLOGACIÓN DE PROVEEDORES
  * ===================================================================== */
+
+/* =====================================================================
+ * HISTÓRICO: EL CIERRE DE UN MES
+ *
+ * Las hojas Ingresos e Informegmail se leen enteras en cada carga y
+ * filtran el mes después, así que el trabajo crece con cada mes que se
+ * acumula. Cerrar un mes lo congela en una fila por proveedor: a partir
+ * de ahí el tablero lee esa fila en vez de recorrer todas las del mes.
+ *
+ * El cierre no borra nada de Ingresos. Es un resumen, no un archivo: las
+ * filas originales siguen ahí para auditar.
+ *
+ * Un mes se puede volver a cerrar. Hace falta: si se corrige una
+ * equivalencia de proveedor, el cierre viejo quedó con el nombre viejo.
+ * ===================================================================== */
+
+/**
+ * Meses cerrados como { '2026-09': { providers: {...}, closedAt, workdays } }.
+ */
+function readHistorico_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_HISTORICO);
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return { months: {}, rows: [] };
+  }
+
+  const values = sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, HISTORICO_HEADERS.length)
+    .getValues();
+
+  const months = {};
+  const rows = [];
+
+  values.forEach(function(row) {
+    const prefix = text_(row[0]);
+    const provider = text_(row[1]);
+
+    if (!/^\d{4}-\d{2}$/.test(prefix) || !provider) { return; }
+
+    if (!months[prefix]) {
+      months[prefix] = {
+        prefix: prefix,
+        providers: {},
+        workdays: toNumber_(row[7]),
+        closedBy: text_(row[8]),
+        closedAt: row[9] instanceof Date ? row[9].getTime() : 0
+      };
+    }
+
+    const entry = {
+      prefix: prefix,
+      provider: provider,
+      plan: toNumber_(row[2]),
+      actual: toNumber_(row[3]),
+      gmail: toNumber_(row[4]),
+      total: toNumber_(row[5])
+    };
+
+    months[prefix].providers[provider] = entry;
+    rows.push(entry);
+  });
+
+  return { months: months, rows: rows };
+}
+
+/**
+ * Serie mensual lista para graficar: un punto por mes cerrado, con su
+ * plan, lo recibido y el cumplimiento, más la trayectoria por proveedor.
+ */
+function buildHistoricoSeries_(historico, currentPrefix) {
+  const prefixes = Object.keys(historico.months).sort();
+
+  const months = prefixes.map(function(prefix) {
+    const month = historico.months[prefix];
+    const providers = Object.keys(month.providers);
+
+    let plan = 0;
+    let actual = 0;
+    let gmail = 0;
+    let total = 0;
+
+    providers.forEach(function(name) {
+      const entry = month.providers[name];
+
+      plan += entry.plan;
+      actual += entry.actual;
+      gmail += entry.gmail;
+      total += entry.total;
+    });
+
+    return {
+      prefix: prefix,
+      label: buildMonthWindow_(prefix).label,
+      plan: round_(plan, 2),
+      actual: round_(actual, 2),
+      gmail: round_(gmail, 2),
+      total: round_(total, 2),
+      compliance: plan > 0 ? round_(total / plan, 4) : null,
+      providers: providers.length,
+      workdays: month.workdays,
+      closed: true
+    };
+  });
+
+  // Trayectoria por proveedor: solo los que aparecen en más de un mes,
+  // que son los que tienen algo que contar.
+  const byProvider = {};
+
+  historico.rows.forEach(function(row) {
+    if (!byProvider[row.provider]) { byProvider[row.provider] = {}; }
+
+    byProvider[row.provider][row.prefix] = {
+      plan: row.plan,
+      total: row.total,
+      compliance: row.plan > 0 ? round_(row.total / row.plan, 4) : null
+    };
+  });
+
+  return {
+    months: months,
+    prefixes: prefixes,
+    providers: byProvider,
+    currentPrefix: currentPrefix
+  };
+}
+
+/**
+ * Meses que el selector puede ofrecer: los que tienen columna en Plan,
+ * más los que ya están cerrados en el histórico aunque su columna se
+ * haya quitado. El mes consultado va siempre, o el selector sale vacío.
+ */
+function mergeAvailableMonths_(planMonths, historicoMonths, month, currentPrefix) {
+  const seen = {};
+  const out = [];
+
+  const push = function(prefix, label, closed) {
+    if (!prefix || seen[prefix]) { return; }
+
+    seen[prefix] = true;
+    out.push({
+      prefix: prefix,
+      label: label || buildMonthWindow_(prefix).label,
+      closed: Boolean(closed)
+    });
+  };
+
+  push(month.prefix, month.label, historicoMonths[month.prefix]);
+  push(currentPrefix, null, historicoMonths[currentPrefix]);
+
+  (planMonths || []).forEach(function(item) {
+    push(item.prefix, item.label, historicoMonths[item.prefix]);
+  });
+
+  Object.keys(historicoMonths).forEach(function(prefix) {
+    push(prefix, null, true);
+  });
+
+  return out.sort(function(a, b) {
+    return a.prefix < b.prefix ? 1 : (a.prefix > b.prefix ? -1 : 0);
+  });
+}
+
+function ensureHistoricoSheet_(spreadsheet) {
+  let sheet = spreadsheet.getSheetByName(CONFIG.SHEET_HISTORICO);
+
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(CONFIG.SHEET_HISTORICO);
+  }
+
+  sheet
+    .getRange(1, 1, 1, HISTORICO_HEADERS.length)
+    .setValues([HISTORICO_HEADERS])
+    .setBackground('#153c27')
+    .setFontColor('#ffffff')
+    .setFontWeight('bold');
+
+  sheet.setFrozenRows(1);
+
+  [90, 230, 110, 120, 140, 110, 110, 100, 190, 140]
+    .forEach(function(width, index) {
+      sheet.setColumnWidth(index + 1, width);
+    });
+
+  return sheet;
+}
+
+/**
+ * Congela un mes en el histórico. Si ya estaba cerrado, lo reemplaza.
+ *
+ * @param {string} monthPrefix  'yyyy-MM'; por omisión, el mes anterior
+ */
+function cerrarMes(monthPrefix) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000);
+
+  try {
+    const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    const timezone = spreadsheet.getSpreadsheetTimeZone() || CONFIG.TIMEZONE;
+    const currentPrefix = Utilities.formatDate(new Date(), timezone, 'yyyy-MM');
+
+    const prefix = /^\d{4}-\d{2}$/.test(String(monthPrefix || ''))
+      ? monthPrefix
+      : previousMonthPrefix_(currentPrefix);
+
+    // Cerrar el mes en curso guardaría una foto a medio sacar.
+    if (prefix >= currentPrefix) {
+      throw new Error(
+        'El mes ' + prefix + ' todavía está en curso. Solo se cierran ' +
+        'meses terminados.'
+      );
+    }
+
+    const data = getDashboardData(prefix, { skipHistorico: true });
+    const summary = summarizeMonth_(data);
+
+    if (!summary.length) {
+      throw new Error('No hay movimiento en ' + prefix + ' para cerrar.');
+    }
+
+    const sheet = ensureHistoricoSheet_(spreadsheet);
+    const author = getActiveUserLabel_();
+    const now = new Date();
+
+    dropHistoricoMonth_(sheet, prefix);
+
+    const values = summary.map(function(item) {
+      return [
+        prefix,
+        item.provider,
+        item.plan,
+        item.actual,
+        item.gmail,
+        item.total,
+        item.plan > 0 ? item.total / item.plan : '',
+        data.workdays.total,
+        author,
+        now
+      ];
+    });
+
+    sheet
+      .getRange(
+        sheet.getLastRow() + 1, 1, values.length, HISTORICO_HEADERS.length
+      )
+      .setValues(values);
+
+    const lastRow = sheet.getLastRow();
+
+    sheet.getRange(2, 3, lastRow - 1, 4).setNumberFormat('#,##0.0');
+    sheet.getRange(2, 7, lastRow - 1, 1).setNumberFormat('0.0%');
+    sheet.getRange(2, 10, lastRow - 1, 1).setNumberFormat('dd/MM/yyyy HH:mm');
+
+    return {
+      prefix: prefix,
+      label: data.month.label,
+      providers: summary.length,
+      total: round_(summary.reduce(function(acc, item) {
+        return acc + item.total;
+      }, 0), 2)
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Totales por proveedor de un mes ya cruzado.
+ */
+function summarizeMonth_(data) {
+  const buckets = {};
+
+  const touch = function(provider) {
+    if (!buckets[provider]) {
+      buckets[provider] = {
+        provider: provider, plan: 0, actual: 0, gmail: 0, total: 0
+      };
+    }
+
+    return buckets[provider];
+  };
+
+  (data.plan || []).forEach(function(item) {
+    touch(item.provider).plan += Number(item.plan) || 0;
+  });
+
+  (data.rows || []).forEach(function(row) {
+    const bucket = touch(row.provider);
+    const amount = Number(row.cantidad) || 0;
+
+    if (row.source === 'GMAIL') { bucket.gmail += amount; }
+    else { bucket.actual += amount; }
+
+    bucket.total += amount;
+  });
+
+  return Object.keys(buckets)
+    .map(function(key) {
+      const item = buckets[key];
+
+      return {
+        provider: item.provider,
+        plan: round_(item.plan, 2),
+        actual: round_(item.actual, 2),
+        gmail: round_(item.gmail, 2),
+        total: round_(item.total, 2)
+      };
+    })
+    .filter(function(item) {
+      return item.plan !== 0 || item.total !== 0;
+    })
+    .sort(function(a, b) {
+      return a.provider.localeCompare(b.provider, 'es', { sensitivity: 'base' });
+    });
+}
+
+function dropHistoricoMonth_(sheet, prefix) {
+  if (sheet.getLastRow() < 2) { return; }
+
+  const keys = sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, 1)
+    .getValues();
+
+  // De abajo hacia arriba: borrar de arriba corre las filas de abajo.
+  for (let index = keys.length - 1; index >= 0; index--) {
+    if (text_(keys[index][0]) === prefix) {
+      sheet.deleteRow(index + 2);
+    }
+  }
+}
+
+function previousMonthPrefix_(prefix) {
+  const parts = String(prefix).split('-');
+  const date = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 2, 1));
+
+  return Utilities.formatDate(date, 'UTC', 'yyyy-MM');
+}
+
+/**
+ * Cierra el mes anterior desde el menú.
+ */
+function cerrarMesAnterior() {
+  const ui = SpreadsheetApp.getUi();
+
+  try {
+    const result = cerrarMes(null);
+
+    ui.alert(
+      'Mes cerrado\n\n' +
+      cap_(result.label) + '\n' +
+      result.providers + ' proveedores · ' +
+      fmtNumber_(result.total) + ' MR\n\n' +
+      'Queda guardado en la hoja ' + CONFIG.SHEET_HISTORICO + '. El ' +
+      'tablero ya no vuelve a recorrer sus filas para mostrarlo.'
+    );
+  } catch (error) {
+    ui.alert('No se pudo cerrar el mes\n\n' + String(error.message || error));
+  }
+}
+
+function cap_(value) {
+  const text = String(value || '');
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
+}
 
 /* =====================================================================
  * HOMOLOGACIÓN: LA TABLA DE EQUIVALENCIAS

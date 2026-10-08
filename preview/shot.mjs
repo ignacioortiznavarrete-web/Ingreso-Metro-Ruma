@@ -35,6 +35,7 @@ const shots = [
   ['proveedores', '#tab-proveedores'],
   ['forestal', '#tab-forestal'],
   ['semana', '#tab-semana'],
+  ['historico', '#tab-historico'],
   ['detalle', '#tab-detalle']
 ];
 

@@ -21,6 +21,7 @@ function renderAll() {
   renderAttack();
   renderProviderTable();
   renderForestal();
+  renderHistorico();
   renderDetail();
   renderHealth();
   renderWeekOptions();
@@ -864,6 +865,244 @@ function renderHealth() {
 
   renderUnmatched();
   renderDuplicates();
+}
+
+/* =====================================================================
+ * HISTÓRICO
+ *
+ * Los meses cerrados salen de la hoja Historico, no de releer Ingresos.
+ * Por eso esta vista es instantánea aunque el año entero esté cargado.
+ * ===================================================================== */
+
+function renderHistorico() {
+  var hist = DATA.historico || { months: [], providers: {}, prefixes: [] };
+  var months = hist.months || [];
+  var empty = id('historicoEmpty');
+
+  if (!months.length) {
+    show('historicoEmpty');
+    id('historicoEmptyText').textContent =
+      'Todavía no hay ningún mes cerrado. Un mes terminado se congela desde ' +
+      'el menú de la planilla, en "MetroRuma Dashboard › Cerrar el mes ' +
+      'anterior": queda guardado en la hoja ' +
+      (DATA.sheets && DATA.sheets.historico ? DATA.sheets.historico : 'Historico') +
+      ' con una fila por proveedor, y el tablero deja de recorrer sus filas ' +
+      'de Ingresos para mostrarlo.';
+
+    id('gaugesHistorico').innerHTML = '';
+    id('histHead').innerHTML = '';
+    id('histBody').innerHTML = '';
+    id('histCount').textContent = 'sin meses cerrados';
+    return;
+  }
+
+  hide('historicoEmpty');
+  renderHistoricoGauges(months);
+  renderHistoricoTable(hist);
+}
+
+function renderHistoricoGauges(months) {
+  var plan = sum(months, 'plan');
+  var total = sum(months, 'total');
+  var gmail = sum(months, 'gmail');
+
+  var closed = months.filter(function(item) {
+    return item.compliance !== null && item.compliance >= 0.95;
+  });
+
+  var best = months.slice().sort(function(a, b) {
+    return (b.compliance || 0) - (a.compliance || 0);
+  })[0];
+
+  var worst = months.slice().sort(function(a, b) {
+    return (a.compliance || 0) - (b.compliance || 0);
+  })[0];
+
+  var cells = [
+    {
+      key: 'Meses cerrados',
+      value: String(months.length),
+      note: months.length === 1
+        ? cap(months[0].label)
+        : monthShort(months[0].label) + ' a ' +
+          monthShort(months[months.length - 1].label),
+      hint: 'Meses congelados en la hoja Historico. El tablero los lee de ' +
+        'ahí en vez de recorrer las filas de Ingresos.'
+    },
+    {
+      key: 'Recibido acumulado',
+      value: fmt(total),
+      note: plan > 0
+        ? pctText(total / plan) + ' del plan de esos meses'
+        : 'Sin plan registrado',
+      hint: 'Suma de todos los meses cerrados.'
+    },
+    {
+      key: 'Meses en línea',
+      value: closed.length + ' de ' + months.length,
+      tone: closed.length === months.length ? 'over' : 'warn',
+      note: 'cerraron sobre el 95% del plan',
+      hint: 'Un mes se considera en línea cuando cierra sobre el 95% de su ' +
+        'plan, el mismo umbral que usa la clasificación semanal.'
+    },
+    {
+      key: 'Mejor mes',
+      value: best && best.compliance !== null
+        ? pctText(best.compliance) : '—',
+      tone: 'over',
+      note: best ? cap(best.label) : 'Sin datos',
+      hint: 'El mes cerrado con mayor cumplimiento del plan.'
+    },
+    {
+      key: 'Peor mes',
+      value: worst && worst.compliance !== null
+        ? pctText(worst.compliance) : '—',
+      tone: 'crit',
+      note: worst ? cap(worst.label) : 'Sin datos',
+      hint: 'El mes cerrado con menor cumplimiento del plan.'
+    },
+    {
+      key: 'Vino sin desglose',
+      value: total > 0 ? pctText(gmail / total) : '—',
+      note: fmt(gmail) + ' MR del complemento Gmail',
+      hint: 'Parte del histórico que entró por el informe diario, que no ' +
+        'detalla material ni predio.'
+    }
+  ];
+
+  id('gaugesHistorico').innerHTML = gaugeMarkup(cells);
+}
+
+function renderHistoricoTable(hist) {
+  var months = hist.months || [];
+  var providers = hist.providers || {};
+  var names = Object.keys(providers);
+
+  id('histCount').textContent =
+    fmtInt(names.length) + (names.length === 1 ? ' proveedor' : ' proveedores');
+
+  if (!names.length) {
+    id('histHead').innerHTML = '';
+    id('histBody').innerHTML =
+      '<tr class="empty"><td>Sin proveedores en los meses cerrados.</td></tr>';
+    return;
+  }
+
+  id('histHead').innerHTML =
+    '<th scope="col">Proveedor</th>' +
+    months.map(function(item) {
+      return '<th class="n" scope="col">' + esc(monthShort(item.label)) + '</th>';
+    }).join('') +
+    '<th class="n" scope="col">Plan total</th>' +
+    '<th class="n" scope="col">Recibido</th>' +
+    '<th class="n" scope="col">Cumplimiento</th>';
+
+  // La ficha habla del mes en curso, así que solo los proveedores que
+  // siguen en el Plan de este mes abren ficha. El resto queda como texto:
+  // un clic que no hace nada se lee como falla.
+  var active = {};
+
+  SUMMARY.forEach(function(item) { active[item.provider] = true; });
+
+  // Ordenado por lo que más pesa en el histórico, no alfabético.
+  var rows = names.map(function(name) {
+    var byMonth = providers[name];
+    var plan = 0;
+    var total = 0;
+
+    months.forEach(function(item) {
+      var entry = byMonth[item.prefix];
+
+      if (entry) { plan += entry.plan; total += entry.total; }
+    });
+
+    return {
+      provider: name,
+      byMonth: byMonth,
+      plan: plan,
+      total: total,
+      compliance: plan > 0 ? total / plan : null
+    };
+  }).sort(function(a, b) { return b.plan - a.plan; });
+
+  id('histBody').innerHTML = rows.map(function(row) {
+    return '<tr' +
+      (active[row.provider]
+        ? ' data-provider="' + esc(row.provider) + '"'
+        : '') + '>' +
+      '<td class="name">' +
+        (active[row.provider]
+          ? '<button type="button" class="linkish" data-provider="' +
+            esc(row.provider) + '">' + esc(row.provider) + '</button>'
+          : '<span title="Ya no está en el Plan de este mes">' +
+            esc(row.provider) + '</span>') +
+      '</td>' +
+      months.map(function(item) {
+        var entry = row.byMonth[item.prefix];
+
+        if (!entry || entry.compliance === null) {
+          return '<td class="n dim">—</td>';
+        }
+
+        var pair = heatColor(entry.compliance);
+
+        return '<td class="n"><span class="hist-cell num" style="background:' +
+          pair[0] + ';color:' + pair[1] + '" title="' +
+          esc(fmt(entry.total) + ' de ' + fmt(entry.plan) + ' MR') + '">' +
+          pctText(entry.compliance) + '</span></td>';
+      }).join('') +
+      cell(fmt(row.plan)) +
+      cell(fmt(row.total)) +
+      cell(
+        row.compliance === null ? '—' : pctText(row.compliance),
+        row.compliance === null
+          ? 'dim'
+          : (row.compliance >= 0.95 ? 'pos' : 'neg')
+      ) +
+    '</tr>';
+  }).join('');
+
+  each('#histBody tr[data-provider]', function(row) {
+    var handle = row.querySelector('.linkish');
+
+    row.addEventListener('click', function() {
+      openDrawer(row.dataset.provider, handle);
+    });
+
+    handle.addEventListener('click', function(event) {
+      event.stopPropagation();
+      openDrawer(row.dataset.provider, handle);
+    });
+  });
+}
+
+function copyHistoricoTable() {
+  var hist = DATA.historico || { months: [], providers: {} };
+  var months = hist.months || [];
+  var providers = hist.providers || {};
+
+  var head = ['Proveedor']
+    .concat(months.map(function(item) { return item.prefix + ' plan'; }))
+    .concat(months.map(function(item) { return item.prefix + ' recibido'; }))
+    .join('\t');
+
+  var body = Object.keys(providers).map(function(name) {
+    var byMonth = providers[name];
+
+    return [name]
+      .concat(months.map(function(item) {
+        return byMonth[item.prefix] ? dec(byMonth[item.prefix].plan) : '';
+      }))
+      .concat(months.map(function(item) {
+        return byMonth[item.prefix] ? dec(byMonth[item.prefix].total) : '';
+      }))
+      .join('\t');
+  });
+
+  copyText(
+    [head].concat(body).join('\n'),
+    body.length + ' proveedores de ' + months.length + ' meses copiados'
+  );
 }
 
 /* =====================================================================

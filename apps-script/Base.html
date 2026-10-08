@@ -226,6 +226,7 @@ function bindEvents() {
   id('btnDetailCopy').addEventListener('click', copyDetailTable);
   id('btnForestalCopy').addEventListener('click', copyForestalTable);
   id('btnSaveAliases').addEventListener('click', saveAliases);
+  id('btnHistCopy').addEventListener('click', copyHistoricoTable);
 
   each('#detailTable th.sortable', function(th) {
     th.addEventListener('click', function() {
@@ -273,7 +274,7 @@ function bindEvents() {
 
     var views = {
       1: 'panorama', 2: 'proveedores', 3: 'forestal',
-      4: 'semana', 5: 'detalle'
+      4: 'semana', 5: 'historico', 6: 'detalle'
     };
 
     if (views[event.key]) {
@@ -315,6 +316,7 @@ function switchView(view) {
     proveedores: 'Cruce por proveedor',
     forestal: 'Origen del suministro',
     semana: 'Apuntes de la semana',
+    historico: 'Meses cerrados',
     detalle: 'Auditoría del dato'
   };
 
@@ -354,13 +356,32 @@ function confirmDiscard(action) {
  * CARGA
  * ===================================================================== */
 
+/* Apps Script corta una ejecución a los seis minutos. Cuando eso pasa el
+   navegador no siempre recibe el aviso, así que el velo se quedaba
+   girando sin decir nada: no es que el tablero esté pensando, es que
+   nadie va a contestar. Se avisa un poco antes. */
+var LOAD_TIMEOUT_MS = 330000;
+var LOAD_TICKET = 0;
+var LOAD_TIMER = null;
+
 function loadData(monthPrefix) {
+  var ticket = ++LOAD_TICKET;
+
   setBusy(true);
   hide('bannerError');
   step('leyendo la planilla…');
 
+  clearTimeout(LOAD_TIMER);
+
+  // Una respuesta que llega después de que el usuario pidió otro mes se
+  // descarta: si no, el mes viejo pisaba al nuevo.
+  var vigente = function() { return ticket === LOAD_TICKET; };
+
   var handler = {
     ok: function(result) {
+      if (!vigente()) { return; }
+
+      clearTimeout(LOAD_TIMER);
       DATA = result;
       DRAFTS = {};
       step('cruzando proveedores…');
@@ -371,6 +392,9 @@ function loadData(monthPrefix) {
       setBusy(false);
     },
     fail: function(error) {
+      if (!vigente()) { return; }
+
+      clearTimeout(LOAD_TIMER);
       setBusy(false);
       showError(
         (error && error.message) ? error.message : String(error)
@@ -384,6 +408,18 @@ function loadData(monthPrefix) {
     ));
     return;
   }
+
+  LOAD_TIMER = setTimeout(function() {
+    if (!vigente()) { return; }
+
+    setBusy(false);
+    showError(
+      'La planilla tardó más de ' + Math.round(LOAD_TIMEOUT_MS / 60000) +
+      ' minutos en responder y Apps Script corta la ejecución ahí. ' +
+      'Suele ser por volumen: las hojas Ingresos e Informegmail se leen ' +
+      'enteras, así que crecen con cada mes que se carga.'
+    );
+  }, LOAD_TIMEOUT_MS);
 
   google.script.run
     .withSuccessHandler(handler.ok)
@@ -544,6 +580,12 @@ function errorHint(text) {
 
   if (key.indexOf('fecha contab') !== -1) {
     return 'La columna E de la hoja Ingresos debe llamarse "Fecha Contab.".';
+  }
+
+  if (key.indexOf('tardó más de') !== -1) {
+    return 'Cierra los meses ya terminados desde el menú ' +
+      '"MetroRuma Dashboard › Cerrar el mes": quedan guardados en la hoja ' +
+      'Historico y el tablero deja de releer sus filas una por una.';
   }
 
   if (key.indexOf('no existe la hoja') !== -1) {

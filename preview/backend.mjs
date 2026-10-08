@@ -33,7 +33,10 @@ const api = new Function(
   return {
     buildWorkdaysInfo_, feriadosChile_, pascua_, solsticioJunio_,
     resolveProvider_, normalizeKey_, buildUnmatchedProviders_,
-    findDuplicateRows_, findSimilarProviders_, fmtNumber_
+    findDuplicateRows_, findSimilarProviders_, fmtNumber_,
+    summarizeMonth_, previousMonthPrefix_, mergeAvailableMonths_,
+    buildHistoricoSeries_, readHistorico_, HISTORICO_HEADERS,
+    readDisplayFallback_
   };`
 )(...Object.values(stubs));
 
@@ -169,6 +172,198 @@ ok('detecta dos nombres del mismo proveedor',
    api.findSimilarProviders_(['SAVI', 'SAVI LTDA', 'DIGUA']).length, 1);
 ok('no inventa parecidos entre proveedores distintos',
    api.findSimilarProviders_(['SAVI', 'DIGUA', 'LLOHUE']).length, 0);
+
+/* ============ historico ============ */
+console.log('\n--- historico ---');
+
+// El mes anterior, incluido el salto de año.
+ok('el mes anterior a octubre es septiembre',
+   api.previousMonthPrefix_('2026-10'), '2026-09');
+ok('el mes anterior a enero es diciembre del año pasado',
+   api.previousMonthPrefix_('2026-01'), '2025-12');
+ok('el mes anterior a marzo es febrero',
+   api.previousMonthPrefix_('2026-03'), '2026-02');
+
+// La foto del mes: plan y movimiento juntos, por proveedor.
+const mesCerrado = {
+  plan: [
+    { provider: 'SAVI', plan: 5200 },
+    { provider: 'DIGUA', plan: 3100 },
+    { provider: 'SIN MOVIMIENTO', plan: 0 }
+  ],
+  rows: [
+    { provider: 'SAVI', cantidad: 2000, source: 'INGRESOS' },
+    { provider: 'SAVI', cantidad: 900, source: 'GMAIL' },
+    { provider: 'DIGUA', cantidad: 3300, source: 'INGRESOS' },
+    { provider: 'NO ESTA EN EL PLAN', cantidad: 400, source: 'INGRESOS' }
+  ],
+  workdays: { total: 22 }
+};
+
+const foto = api.summarizeMonth_(mesCerrado);
+
+ok('una fila por proveedor con plan o movimiento', foto.length, 3);
+ok('ordena alfabético para que el mes se lea igual siempre',
+   foto.map((item) => item.provider),
+   ['DIGUA', 'NO ESTA EN EL PLAN', 'SAVI']);
+ok('separa lo que vino por SAP de lo que vino por Gmail',
+   foto.filter((item) => item.provider === 'SAVI')[0],
+   { provider: 'SAVI', plan: 5200, actual: 2000, gmail: 900, total: 2900 });
+ok('el total es SAP más Gmail',
+   foto.every((item) => Math.abs(item.total - item.actual - item.gmail) < 0.01),
+   true);
+ok('guarda al que entregó sin estar en el plan',
+   foto.filter((item) => item.provider === 'NO ESTA EN EL PLAN')[0].total, 400);
+ok('descarta al que no tiene plan ni movimiento',
+   foto.filter((item) => item.provider === 'SIN MOVIMIENTO').length, 0);
+
+// La serie que grafica el tablero sale de las filas de la hoja.
+const historico = {
+  months: {
+    '2026-08': {
+      prefix: '2026-08', workdays: 21, closedBy: 'comprador', closedAt: 2,
+      providers: {
+        SAVI: { plan: 5000, actual: 4000, gmail: 1200, total: 5200 },
+        DIGUA: { plan: 3000, actual: 2400, gmail: 0, total: 2400 }
+      }
+    },
+    '2026-07': {
+      prefix: '2026-07', workdays: 22, closedBy: 'comprador', closedAt: 1,
+      providers: {
+        SAVI: { plan: 5000, actual: 4100, gmail: 300, total: 4400 }
+      }
+    }
+  },
+  rows: [
+    { prefix: '2026-08', provider: 'SAVI', plan: 5000, actual: 4000, gmail: 1200, total: 5200 },
+    { prefix: '2026-08', provider: 'DIGUA', plan: 3000, actual: 2400, gmail: 0, total: 2400 },
+    { prefix: '2026-07', provider: 'SAVI', plan: 5000, actual: 4100, gmail: 300, total: 4400 }
+  ]
+};
+
+const serie = api.buildHistoricoSeries_(historico, '2026-09');
+
+ok('los meses salen del más viejo al más nuevo',
+   serie.months.map((item) => item.prefix), ['2026-07', '2026-08']);
+ok('suma el plan del mes', serie.months[1].plan, 8000);
+ok('suma lo recibido del mes', serie.months[1].total, 7600);
+ok('el cumplimiento es recibido sobre plan', serie.months[1].compliance, 0.95);
+ok('cuenta los proveedores del mes', serie.months[1].providers, 2);
+ok('conserva los días hábiles con que se cerró', serie.months[1].workdays, 21);
+ok('arma la trayectoria por proveedor',
+   Object.keys(serie.providers).sort(), ['DIGUA', 'SAVI']);
+ok('un proveedor que falta un mes no inventa el dato',
+   serie.providers.DIGUA['2026-07'], undefined);
+ok('guarda el cumplimiento de cada celda',
+   serie.providers.SAVI['2026-07'].compliance, 0.88);
+ok('un mes sin plan no divide por cero',
+   api.buildHistoricoSeries_({
+     months: {
+       '2026-06': { prefix: '2026-06', workdays: 20, providers: {
+         X: { plan: 0, actual: 100, gmail: 0, total: 100 }
+       } }
+     },
+     rows: [{ prefix: '2026-06', provider: 'X', plan: 0, actual: 100, gmail: 0, total: 100 }]
+   }, '2026-09').months[0].compliance, null);
+
+// El selector ofrece los meses del Plan y los cerrados, sin repetir.
+const meses = api.mergeAvailableMonths_(
+  [{ prefix: '2026-09', label: 'septiembre de 2026' },
+   { prefix: '2026-08', label: 'agosto de 2026' }],
+  { '2026-08': true, '2026-07': true },
+  { prefix: '2026-09', label: 'septiembre de 2026' },
+  '2026-09'
+);
+
+ok('ofrece los meses del Plan más los cerrados',
+   meses.map((item) => item.prefix), ['2026-09', '2026-08', '2026-07']);
+ok('el más nuevo va primero', meses[0].prefix, '2026-09');
+ok('marca cuáles están cerrados',
+   meses.map((item) => item.closed), [false, true, true]);
+ok('no repite un mes que está en las dos listas',
+   meses.filter((item) => item.prefix === '2026-08').length, 1);
+ok('un mes cerrado sin columna en Plan igual aparece',
+   meses.filter((item) => item.prefix === '2026-07')[0].label,
+   'julio de 2026');
+ok('el mes consultado nunca falta del selector',
+   api.mergeAvailableMonths_(
+     [], {}, { prefix: '2026-04', label: 'abril de 2026' }, '2026-09'
+   ).map((item) => item.prefix), ['2026-09', '2026-04']);
+
+// La hoja y el lector tienen que hablar de las mismas columnas.
+ok('la hoja Historico guarda diez columnas',
+   api.HISTORICO_HEADERS.length, 10);
+ok('la primera columna es el mes', api.HISTORICO_HEADERS[0], 'Mes');
+
+/* ============ lectura de la hoja ============ */
+console.log('\n--- lectura de la hoja ---');
+
+// El respaldo con formato es lo que colgaba el tablero: formatear cada
+// celda de la hoja entera, mes tras mes, se come los seis minutos que
+// Apps Script da por ejecución. Ahora solo se pide cuando hace falta, y
+// solo las columnas que se usan.
+function hojaStub() {
+  const calls = [];
+
+  return {
+    calls,
+    getRange(row, column, rows, columns) {
+      calls.push({ row, column, rows, columns });
+
+      return {
+        getDisplayValues: () =>
+          Array.from({ length: rows }, (unused, r) =>
+            Array.from({ length: columns }, (unused2, c) =>
+              `f${r}c${column - 1 + c}`))
+      };
+    }
+  };
+}
+
+const typed = [
+  ['cab', 'cab', 'cab', 'cab', 'cab'],
+  ['a', new Date('2026-09-01'), 'b', 120, 'c'],
+  ['a', new Date('2026-09-02'), 'b', 240, 'c']
+];
+
+const sinFalta = hojaStub();
+
+ok('no pide formato si los valores alcanzan',
+   api.readDisplayFallback_(sinFalta, typed, 3, 5, [1, 3], () => false), null);
+ok('  y por lo tanto no toca la hoja', sinFalta.calls.length, 0);
+
+// SAP a veces exporta la fecha como texto: ahí sí hace falta el formato.
+const comoTexto = [
+  typed[0],
+  typed[1],
+  ['a', '02.09.2026', 'b', 240, 'c']
+];
+
+const conFalta = hojaStub();
+const respaldo = api.readDisplayFallback_(
+  conFalta, comoTexto, 3, 5, [1, 3], (row) => !(row[1] instanceof Date)
+);
+
+ok('pide formato cuando una fila no trae fecha usable',
+   conFalta.calls.length, 1);
+ok('  pide solo el tramo de columnas que se usa',
+   conFalta.calls[0], { row: 1, column: 2, rows: 3, columns: 3 });
+ok('  devuelve las celdas en su columna original',
+   [respaldo[1][1], respaldo[1][3]], ['f1c1', 'f1c3']);
+ok('  y deja vacío lo que no pidió', respaldo[1][0], undefined);
+ok('  con una fila por fila de la hoja', respaldo.length, 3);
+
+// Una sola columna no puede pedir un tramo de cero.
+const unaSola = hojaStub();
+api.readDisplayFallback_(unaSola, typed, 3, 5, [3], () => true);
+ok('una sola columna pide una sola columna',
+   unaSola.calls[0], { row: 1, column: 4, rows: 3, columns: 1 });
+
+// El tramo nunca puede pasarse del ancho leído.
+const alBorde = hojaStub();
+api.readDisplayFallback_(alBorde, typed, 3, 5, [4], () => true);
+ok('no pide más allá del ancho de la hoja',
+   alBorde.calls[0].column + alBorde.calls[0].columns - 1, 5);
 
 console.log(`\n${passed} pasan, ${failed} fallan`);
 process.exit(failed ? 1 : 0);

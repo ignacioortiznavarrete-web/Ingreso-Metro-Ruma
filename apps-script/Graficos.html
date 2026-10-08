@@ -1885,6 +1885,281 @@ function drawPortfolio() {
 }
 
 /* ---------------------------------------------------------------------
+ * HISTÓRICO: PLAN CONTRA RECIBIDO, MES A MES
+ *
+ * Columnas apiladas con la marca del plan encima, no barras pareadas: lo
+ * que se compara es un total contra su objetivo, y apilar conserva la
+ * procedencia del dato (sólido Ingresos, rayado complemento) que el resto
+ * del tablero ya usa.
+ * ------------------------------------------------------------------- */
+
+function drawHistMonths() {
+  var host = id('chartHistMes');
+
+  if (!host) { return; }
+
+  var months = ((DATA.historico || {}).months) || [];
+
+  if (!months.length) {
+    setChartEmpty(host, 'Todavía no hay meses cerrados.');
+    return;
+  }
+
+  host.className = 'chart';
+
+  var width = px(host);
+  var height = 300;
+  var padL = 66;
+  var padR = 18;
+  var padT = 22;
+  var padB = 46;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
+
+  var max = niceMax(Math.max.apply(null, months.map(function(item) {
+    return Math.max(item.total, item.plan);
+  }).concat([1])) * 1.08);
+
+  // Con dos o tres meses cerrados, repartir todo el ancho deja barras
+  // sueltas en las orillas. El grupo se compacta y se centra: el gráfico
+  // crece a lo ancho a medida que el año se va cerrando.
+  var slot = Math.min(innerW / months.length, 132);
+  var originX = padL + (innerW - slot * months.length) / 2;
+  var barW = Math.max(14, Math.min(74, slot * 0.5));
+
+  var toX = function(index) { return originX + slot * (index + 0.5); };
+  var toY = function(value) {
+    return padT + innerH - (value / max) * innerH;
+  };
+
+  var parts = [tag('defs', {}, hatch('histHatch', PALETTE.brand3))];
+
+  ticks(max, 4).forEach(function(value) {
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, fmt(value)));
+  });
+
+  months.forEach(function(item, index) {
+    var x = toX(index) - barW / 2;
+    var baseY = padT + innerH;
+
+    var tip = tipRow(cap(item.label), [
+      ['Plan del mes', fmt(item.plan) + ' MR'],
+      ['Ingreso real', fmt(item.actual) + ' MR'],
+      ['Complemento Gmail', fmt(item.gmail) + ' MR'],
+      ['Total', fmt(item.total) + ' MR'],
+      item.compliance === null
+        ? null
+        : ['Cumplimiento', pctText(item.compliance)],
+      ['Proveedores', String(item.providers)],
+      ['Días hábiles', String(item.workdays)]
+    ]);
+
+    var actualH = Math.max(0, baseY - toY(item.actual));
+    var gmailH = Math.max(0, baseY - toY(item.total) - actualH);
+
+    parts.push(tag('rect', {
+      x: x, y: toY(item.actual), width: barW, height: actualH,
+      fill: PALETTE.brand, class: 'bar-grow',
+      style: 'animation-delay:' + (index * 40) + 'ms',
+      'data-tip': tip
+    }));
+
+    if (gmailH > 0.5) {
+      // Hueco de 2px entre tramos: separa sin dibujarles un borde.
+      parts.push(tag('rect', {
+        x: x, y: toY(item.total), width: barW,
+        height: Math.max(1, gmailH - 2),
+        fill: 'url(#histHatch)', stroke: PALETTE.brand3,
+        'stroke-width': 1, class: 'bar-grow',
+        style: 'animation-delay:' + (index * 40 + 50) + 'ms',
+        'data-tip': tip
+      }));
+    }
+
+    // La marca del plan: una regla, como en la ruma.
+    parts.push(tag('line', {
+      x1: x - 5, x2: x + barW + 5,
+      y1: toY(item.plan), y2: toY(item.plan),
+      stroke: PALETTE.ink, 'stroke-width': 2,
+      class: 'ghost', 'data-tip': tip
+    }));
+
+    parts.push(tag('text', {
+      x: toX(index), y: height - padB + 17,
+      'text-anchor': 'middle', class: 'chart-axis'
+    }, esc(monthShort(item.label))));
+
+    if (item.compliance !== null) {
+      parts.push(tag('text', {
+        x: toX(index), y: toY(Math.max(item.total, item.plan)) - 8,
+        'text-anchor': 'middle', class: 'chart-value ghost',
+        fillStyle: item.compliance >= 0.95 ? PALETTE.divOver : PALETTE.divUnder,
+        style: 'font-size:11px;font-weight:700'
+      }, pctText(item.compliance)));
+    }
+  });
+
+  parts.push(legend(width, height - padB + 24, [
+    ['Ingreso real', PALETTE.brand, 'band'],
+    ['Complemento Gmail', PALETTE.brand3, 'band'],
+    ['Plan del mes', PALETTE.ink, 'solid']
+  ]));
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + (height + 26),
+    width: '100%', height: height + 26, role: 'img',
+    'aria-label': 'Plan contra recibido en cada mes cerrado.'
+  }, parts.join(''));
+
+  layoutLegend(host, width);
+  bindTips(host);
+}
+
+/* ---------------------------------------------------------------------
+ * HISTÓRICO: CUMPLIMIENTO MES A MES
+ * ------------------------------------------------------------------- */
+
+function drawHistCompliance() {
+  var host = id('chartHistCumpl');
+  var note = id('histTrendNote');
+
+  if (!host) { return; }
+
+  var months = (((DATA.historico || {}).months) || []).filter(function(item) {
+    return item.compliance !== null;
+  });
+
+  if (months.length < 2) {
+    setChartEmpty(host, 'Hacen falta dos meses cerrados para ver una ' +
+      'tendencia.');
+    if (note) { note.textContent = ''; }
+    return;
+  }
+
+  host.className = 'chart';
+
+  var width = px(host);
+  var height = 260;
+  var padL = 56;
+  var padR = 18;
+  var padT = 20;
+  var padB = 42;
+  var innerW = width - padL - padR;
+  var innerH = height - padT - padB;
+
+  var values = months.map(function(item) { return item.compliance * 100; });
+  var top = niceMax(Math.max(110, Math.max.apply(null, values) * 1.06));
+  var bottom = Math.max(0, Math.min(90, Math.min.apply(null, values) * 0.94));
+  var range = top - bottom || 1;
+
+  // Mismo criterio que las barras: dos puntos separados por el ancho
+  // entero se leen como una recta sin información.
+  var count = months.length;
+  var step = Math.min(innerW / Math.max(1, count - 1), 190);
+  var originX = padL + (innerW - step * (count - 1)) / 2;
+  var toX = function(index) { return originX + step * index; };
+  var toY = function(value) {
+    return padT + innerH - ((value - bottom) / range) * innerH;
+  };
+
+  var parts = [];
+
+  ticks(range, 4).forEach(function(offset) {
+    var value = bottom + offset;
+
+    parts.push(tag('line', {
+      x1: padL, x2: width - padR, y1: toY(value), y2: toY(value),
+      class: 'chart-grid'
+    }));
+
+    parts.push(tag('text', {
+      x: padL - 8, y: toY(value) + 3.5,
+      'text-anchor': 'end', class: 'chart-axis'
+    }, Math.round(value) + '%'));
+  });
+
+  // Corredor del ±5%: el mismo criterio que la curva del mes.
+  parts.push(tag('rect', {
+    x: padL, y: toY(105), width: innerW,
+    height: Math.max(1, toY(95) - toY(105)),
+    fill: 'rgba(115, 158, 131, .18)'
+  }));
+
+  parts.push(tag('line', {
+    x1: padL, x2: width - padR, y1: toY(100), y2: toY(100),
+    class: 'chart-rule'
+  }));
+
+  var points = months.map(function(item, index) {
+    return [toX(index), toY(item.compliance * 100)];
+  });
+
+  parts.push(line(points, PALETTE.brand, 2.2, null, true));
+
+  months.forEach(function(item, index) {
+    var good = item.compliance >= 0.95;
+
+    parts.push(tag('circle', {
+      cx: points[index][0], cy: points[index][1], r: 4.5,
+      fill: good ? PALETTE.divOver : PALETTE.divUnder,
+      stroke: '#ffffff', 'stroke-width': 2, class: 'blip',
+      style: 'animation-delay:' + (index * 50) + 'ms',
+      'data-tip': tipRow(cap(item.label), [
+        ['Cumplimiento', pctText(item.compliance)],
+        ['Recibido', fmt(item.total) + ' MR'],
+        ['Plan', fmt(item.plan) + ' MR'],
+        ['Desvío', signed(item.total - item.plan) + ' MR']
+      ])
+    }));
+
+    parts.push(tag('text', {
+      x: toX(index), y: height - padB + 17,
+      'text-anchor': 'middle', class: 'chart-axis'
+    }, esc(monthShort(item.label))));
+  });
+
+  host.innerHTML = tag('svg', {
+    viewBox: '0 0 ' + width + ' ' + height,
+    width: '100%', height: height, role: 'img',
+    'aria-label': 'Cumplimiento del plan en cada mes cerrado.'
+  }, parts.join(''));
+
+  bindTips(host);
+
+  if (note) {
+    var first = months[0];
+    var last = months[months.length - 1];
+    var delta = last.compliance - first.compliance;
+
+    note.textContent =
+      months.length + ' meses cerrados. De ' + pctText(first.compliance) +
+      ' en ' + monthShort(first.label) + ' a ' + pctText(last.compliance) +
+      ' en ' + monthShort(last.label) + ': ' +
+      (Math.abs(delta) < 0.02
+        ? 'parejo.'
+        : (delta > 0 ? 'mejorando ' : 'cayendo ') +
+          signed(Math.abs(delta) * 100, 0) + ' puntos.');
+  }
+}
+
+/** "septiembre de 2026" -> "sep 2026", para el eje. */
+function monthShort(label) {
+  var parts = String(label || '').split(' de ');
+
+  return parts.length === 2
+    ? parts[0].slice(0, 3) + ' ' + parts[1]
+    : String(label || '');
+}
+
+/* ---------------------------------------------------------------------
  * SPARKLINE
  * ------------------------------------------------------------------- */
 
@@ -1985,6 +2260,9 @@ function redrawCharts() {
     drawStatus();
     drawProductMix();
     drawEstates();
+  } else if (VIEW === 'historico') {
+    drawHistMonths();
+    drawHistCompliance();
   }
 }
 </script>

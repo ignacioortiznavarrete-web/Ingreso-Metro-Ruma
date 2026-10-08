@@ -12,18 +12,18 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 
 | Archivo | Qué es | Líneas |
 |---|---|---|
-| `apps-script/Codigo.gs` | Backend: calendario de días hábiles, lee `Plan`, `Ingresos` e `Informegmail`, importa los correos y guarda los apuntes. | ~2.690 |
+| `apps-script/Codigo.gs` | Backend: calendario de días hábiles, lee `Plan`, `Ingresos` e `Informegmail`, importa los correos, cierra meses en `Historico` y guarda los apuntes. | ~3.100 |
 | `apps-script/Index.html` | Estructura del tablero. Une los demás con `include()`. | ~750 |
 | `apps-script/Estilos.html` | Sistema visual: tokens, componentes, movimiento e impresión. | ~1.890 |
 | `apps-script/Base.html` | Estado compartido, navegación, carga, preferencias y formato. | ~700 |
 | `apps-script/Analisis.html` | Todas las métricas: proveedor, día, semana y origen del suministro. | ~805 |
-| `apps-script/Graficos.html` | Motor SVG propio: ruma, brecha diaria, curva, diario, mancuerna de ritmo, desvío, Pareto, mix, frentes, semáforo, matriz y sparkline. | ~1.800 |
-| `apps-script/Tablero.html` | Panorama, proveedores, forestal, detalle y la ficha lateral. | ~1.230 |
+| `apps-script/Graficos.html` | Motor SVG propio: ruma, brecha diaria, curva, diario, mancuerna de ritmo, desvío, Pareto, mix, frentes, semáforo, matriz, histórico mensual y sparkline. | ~2.140 |
+| `apps-script/Tablero.html` | Panorama, proveedores, forestal, histórico, detalle y la ficha lateral. | ~1.480 |
 | `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 84 comprobaciones de interacción sobre la copia autónoma. | |
-| `preview/backend.mjs` | 28 comprobaciones del backend: calendario y homologación. | |
+| `preview/pruebas.mjs` | 96 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/backend.mjs` | 64 comprobaciones del backend: calendario, homologación, histórico y lectura de la hoja. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -49,8 +49,8 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/backend.mjs        # 28 comprobaciones del backend, sin navegador
-node preview/pruebas.mjs        # 84 comprobaciones de interacción sobre Chromium
+node preview/backend.mjs        # 64 comprobaciones del backend, sin navegador
+node preview/pruebas.mjs        # 96 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
 
@@ -73,7 +73,7 @@ sin tocar la planilla.
 
 | Tecla | Qué hace |
 |---|---|
-| `1` `2` `3` `4` `5` | Cambia de vista |
+| `1` `2` `3` `4` `5` `6` | Cambia de vista |
 | `/` | Abre los filtros y va a la búsqueda |
 | `Esc` | Cierra la ficha del proveedor |
 
@@ -81,7 +81,7 @@ Los atajos no se disparan mientras se escribe un apunte.
 
 ---
 
-## Las cinco vistas
+## Las seis vistas
 
 **Panorama.** La ruma del mes (el plan como regla graduada, el avance apilado
 por día hábil, la proyección en silueta), la banda de diagnóstico, la lista de
@@ -103,6 +103,12 @@ entrar, el tablero ya trae redactado un diagnóstico y un plan de acción por
 proveedor con los números de la semana. Se corrigen y se guardan en la hoja
 `Apuntes`. Desde aquí sale el **informe semanal**: se copia como texto para
 mandarlo por correo o se imprime a PDF con los apuntes abiertos.
+
+**Histórico.** Los meses ya cerrados: plan contra recibido mes a mes, el
+cumplimiento en el tiempo y la trayectoria de cada proveedor en una tabla de
+calor. Responde la pregunta que ninguna vista del mes en curso puede
+responder: *¿este proveedor falla siempre o falló una vez?*, que es lo que
+decide si se le renueva el programa.
 
 **Detalle.** Salud de los datos, **los proveedores sin homologar con su
 resolvedor**, el aviso de posible doble conteo y la auditoría fila por fila,
@@ -206,6 +212,61 @@ es demasiado oscuro para un relleno grande. El par de los gráficos
 (`#00906c` / `#a82120`) pasa los seis controles del validador —ΔE 11,4 en
 deuteranopia, 29,2 en visión normal— y de todas formas el color solo refuerza:
 el lado del cero y la posición de los puntos ya dicen el signo.
+
+## Datos históricos (hoja `Historico`)
+
+Cargar octubre con septiembre ya adentro dejaba el tablero girando para
+siempre. No era el navegador: era el backend.
+
+`readIngresos_` y `readGmailProviderRows_` hacían `getDataRange()` dos veces
+—`getValues()` **y** `getDisplayValues()`— sobre la hoja entera, y recién
+después filtraban por mes en JavaScript. `getDisplayValues()` formatea cada
+celda una por una; con dos meses acumulados el trabajo se duplica, y Apps
+Script corta la ejecución a los seis minutos **sin avisarle al navegador**.
+El `google.script.run` nunca llama a su `withSuccessHandler` ni a su
+`withFailureHandler`, así que el velo de carga se queda puesto.
+
+Se arregló por los dos lados:
+
+- **Se lee solo lo que se usa.** `getRange(1, 1, lastRow, ancho)` en vez de
+  `getDataRange()`: el ancho sale de la columna más a la derecha que
+  `CONFIG.INGRESOS_COLUMNS` nombra, no de todo lo que SAP exporta.
+- **El formato pasó a ser el respaldo, no la regla.** `readDisplayFallback_`
+  recorre primero los valores tipados; solo si alguna fila trae la fecha o la
+  cantidad como texto pide `getDisplayValues()`, y únicamente del tramo de
+  columnas que hace falta. En una hoja sana no se pide nunca.
+- **El navegador dejó de esperar para siempre.** `loadData` arma un turno con
+  `LOAD_TICKET` y un `LOAD_TIMEOUT_MS` de 5,5 minutos: si la respuesta no
+  llega, el velo se saca y sale un aviso que dice qué hacer. Una respuesta
+  vieja que llega tarde ya no pisa a la nueva.
+
+### Cerrar el mes
+
+Lo anterior hace que un mes de más no cuelgue, pero el trabajo sigue creciendo
+con el año. Por eso un mes terminado se **congela**: desde el menú de la
+planilla, en *MetroRuma Dashboard › Cerrar el mes anterior*.
+
+`cerrarMes(prefijo)` cruza el mes una última vez y guarda una fila por
+proveedor en la hoja `Historico`:
+
+| Mes | Proveedor | Plan | Ingreso real | Complemento Gmail | Total | Cumplimiento | Días hábiles | Cerrado por | Cerrado |
+|---|---|---|---|---|---|---|---|---|---|
+
+A partir de ahí la vista Histórico lee esa foto en vez de recorrer otra vez
+las filas de `Ingresos`. Guarda los días hábiles con que se cerró, así que el
+mes queda contado con el calendario que regía entonces.
+
+- **No se cierra el mes en curso.** Sería una foto a medio sacar; la función
+  lo rechaza con el mes en el mensaje.
+- **Volver a cerrar reemplaza.** Si después se arregla una homologación, se
+  cierra de nuevo y la foto se rehace: `dropHistoricoMonth_` borra las filas
+  viejas de ese mes antes de escribir las nuevas.
+- **Se guarda a quién le faltó plan y a quién le sobró.** Un proveedor que
+  entregó sin estar en el Plan queda igual en la foto; el que no tiene ni plan
+  ni movimiento no ensucia la tabla.
+- **El selector de meses no pierde nada.** `mergeAvailableMonths_` junta los
+  meses con columna en `Plan` y los que ya están cerrados, aunque su columna
+  se haya quitado de la planilla, y marca cuáles son cuáles.
 
 ## Homologación de proveedores (hoja `Homologacion`)
 
@@ -555,15 +616,16 @@ que no los usaba nadie.
 
 ## Verificación
 
-`preview/backend.mjs` corre 28 comprobaciones sin navegador: los días hábiles
+`preview/backend.mjs` corre 64 comprobaciones sin navegador: los días hábiles
 de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
 y el solsticio contra fechas oficiales conocidas, el orden de resolución de
-proveedores y la detección de duplicidad.
+proveedores, la detección de duplicidad, el cierre de mes y la lectura de la
+hoja.
 
-`preview/pruebas.mjs` corre 84 comprobaciones de interacción sobre
+`preview/pruebas.mjs` corre 96 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
-guardar, informe semanal y memoria entre sesiones.
+guardar, informe semanal, histórico y memoria entre sesiones.
 
 Sobre los días hábiles se comprueba el caso concreto: que septiembre de 2026
 dé **21** días hábiles, que el feriado descontado sea el 18 con su nombre, que
@@ -571,6 +633,19 @@ el calendario pinte una casilla por día y que la suma de días hábiles del
 calendario cuadre con el total que usa el prorrateo. Sobre la vista forestal,
 que el mix cuadre exactamente con lo que vino de `Ingresos` y que las
 participaciones sumen 100%.
+
+Del histórico se comprueba que los totales cuadren por los dos lados: la suma
+por mes contra la suma por proveedor, que el cumplimiento sea lo recibido sobre
+el plan en cada celda, que un mes sin plan no divida por cero y que un
+proveedor que faltó un mes no aparezca con un dato inventado. Del cierre, que
+no se pueda cerrar el mes en curso, que el salto de año en el mes anterior sea
+correcto (enero → diciembre del año pasado) y que el selector no pierda un mes
+cerrado al que después le quitaron la columna en `Plan`.
+
+De la lectura de la hoja —lo que colgaba el tablero— se comprueba lo que de
+verdad importa: que con los valores tipados **no se toque la hoja ni una vez**
+para pedir formato, que cuando sí haga falta se pida solo el tramo de columnas
+que se usa, y que el respaldo devuelva cada celda en su columna original.
 
 De los dos gráficos nuevos se comprueba el dato, no solo que se dibujen: que
 la brecha del último día sea exactamente el acumulado menos el plan a esa

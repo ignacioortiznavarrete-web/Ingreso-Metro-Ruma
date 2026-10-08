@@ -65,6 +65,17 @@
         <span class="rail-tab-badge" id="badgeNotes" hidden>0</span>
       </button>
 
+      <button type="button" class="rail-tab" role="tab" id="tab-historico"
+              aria-controls="view-historico" aria-selected="false" data-view="historico">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M4 20V9M9.5 20V4M15 20v-7M20.5 20v-11"
+                stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M3 20h18" stroke="currentColor" stroke-width="1.6"
+                stroke-linecap="round"/>
+        </svg>
+        <span class="rail-tab-label">Histórico</span>
+      </button>
+
       <button type="button" class="rail-tab" role="tab" id="tab-detalle"
               aria-controls="view-detalle" aria-selected="false" data-view="detalle">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -638,6 +649,92 @@
         </section>
 
         <div class="notes" id="notesList"></div>
+      </div>
+
+      <!-- ============================================================
+           HISTÓRICO · MESES CERRADOS
+           ============================================================ -->
+      <div class="tabpanel" id="view-historico" role="tabpanel"
+           aria-labelledby="tab-historico" hidden>
+
+        <div class="notice notice-info" id="historicoEmpty" hidden>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M12 11v5M12 7.5v.5" stroke="currentColor"
+                  stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <div class="notice-body" id="historicoEmptyText"></div>
+        </div>
+
+        <section class="gauges" id="gaugesHistorico"
+                 aria-label="Mediciones del histórico"></section>
+
+        <div class="grid stagger" id="historicoCharts">
+          <section class="panel full" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Plan contra recibido, mes a mes</h2>
+                <p class="panel-note">
+                  Cada columna es un mes cerrado: sólido lo que vino de
+                  Ingresos, rayado el complemento Gmail. La marca horizontal
+                  es el plan de ese mes.
+                </p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart" id="chartHistMes"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="grid stagger">
+          <section class="panel full" style="--i:0">
+            <div class="panel-head">
+              <div>
+                <h2 class="panel-title">Cumplimiento mes a mes</h2>
+                <p class="panel-note">
+                  Lo recibido sobre el plan de cada mes. La línea del 100% es
+                  el plan cumplido; el corredor gris es el ±5% donde el mes
+                  todavía se considera en línea.
+                </p>
+                <p class="panel-note num" id="histTrendNote"></p>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="chart" id="chartHistCumpl"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2 class="panel-title">Trayectoria por proveedor</h2>
+              <p class="panel-note">
+                Cumplimiento de cada proveedor en cada mes cerrado. Separa al
+                que falla siempre del que falló una vez, que es lo que decide
+                si se renueva un programa.
+              </p>
+            </div>
+            <div class="panel-tools">
+              <span class="stamp">
+                <span class="stamp-value" id="histCount">—</span>
+              </span>
+              <button type="button" class="btn btn-sm" id="btnHistCopy">
+                Copiar tabla
+              </button>
+            </div>
+          </div>
+
+          <div class="panel-body panel-body-flush">
+            <div class="table-wrap">
+              <table class="table" id="histTable">
+                <thead><tr id="histHead"></tr></thead>
+                <tbody id="histBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
 
       <!-- ============================================================
