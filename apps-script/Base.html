@@ -364,6 +364,23 @@ var LOAD_TIMEOUT_MS = 330000;
 var LOAD_TICKET = 0;
 var LOAD_TIMER = null;
 
+/* Red de seguridad. Un error que escape de cualquier camino —un gráfico que
+   se redibuja al cambiar el tamaño, un temporizador— deja el velo puesto y
+   el tablero parece colgado cuando en realidad ya terminó. Ante la duda se
+   levanta el velo y se dice qué pasó: un tablero con un aviso se puede
+   arreglar, uno girando no. */
+window.addEventListener('error', function(event) {
+  if (!BUSY) { return; }
+
+  var error = event.error || event.message;
+
+  setBusy(false);
+  showError(
+    'Los datos llegaron bien, pero el tablero no pudo dibujarlos: ' +
+    ((error && error.message) ? error.message : String(error))
+  );
+});
+
 function loadData(monthPrefix) {
   var ticket = ++LOAD_TICKET;
 
@@ -382,13 +399,28 @@ function loadData(monthPrefix) {
       if (!vigente()) { return; }
 
       clearTimeout(LOAD_TIMER);
-      DATA = result;
-      DRAFTS = {};
-      step('cruzando proveedores…');
-      configure();
-      applyPrefs();
-      renderAll();
-      savePrefs();
+
+      // Si dibujar falla, el velo se queda puesto para siempre: el error
+      // revienta antes de setBusy(false) y google.script.run no lo ve,
+      // porque su withFailureHandler solo mira lo que pasa en el servidor.
+      // Desde afuera es idéntico a una planilla que no responde.
+      try {
+        DATA = result;
+        DRAFTS = {};
+        step('cruzando proveedores…');
+        configure();
+        applyPrefs();
+        renderAll();
+        savePrefs();
+      } catch (error) {
+        setBusy(false);
+        showError(
+          'Los datos llegaron bien, pero el tablero no pudo dibujarlos: ' +
+          ((error && error.message) ? error.message : String(error))
+        );
+        return;
+      }
+
       setBusy(false);
     },
     fail: function(error) {
@@ -587,6 +619,14 @@ function errorHint(text) {
       '—formato o algo pegado mil filas más abajo—: se lee entera en cada ' +
       'carga. "Medir la carga" lo dice y explica cómo achicarlo. También ' +
       'ayuda cerrar los meses terminados desde el mismo menú.';
+  }
+
+  if (key.indexOf('no pudo dibujarlos') !== -1) {
+    return 'Casi siempre es que los archivos del tablero quedaron ' +
+      'desparejos: Codigo.gs de una versión e Index.html, Base.html, ' +
+      'Tablero.html, Graficos.html, Analisis.html, Estilos.html o ' +
+      'Bitacora.html de otra. Cópialos todos de nuevo, no solo el que ' +
+      'cambió.';
   }
 
   if (key.indexOf('no existe la hoja') !== -1) {

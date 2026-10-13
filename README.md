@@ -22,8 +22,8 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 96 comprobaciones de interacción sobre la copia autónoma. | |
-| `preview/backend.mjs` | 79 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja, costo del cruce y rango usado. | |
+| `preview/pruebas.mjs` | 100 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/backend.mjs` | 90 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja, costo del cruce y rango usado. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -49,8 +49,8 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/backend.mjs        # 79 comprobaciones del backend, sin navegador
-node preview/pruebas.mjs        # 96 comprobaciones de interacción sobre Chromium
+node preview/backend.mjs        # 90 comprobaciones del backend, sin navegador
+node preview/pruebas.mjs        # 100 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
 
@@ -303,6 +303,41 @@ Se arregló por los dos lados:
   `LOAD_TICKET` y un `LOAD_TIMEOUT_MS` de 5,5 minutos: si la respuesta no
   llega, el velo se saca y sale un aviso que dice qué hacer. Una respuesta
   vieja que llega tarde ya no pisa a la nueva.
+
+### El velo eterno no siempre era la planilla
+
+Con el backend ya rápido —7,3 s medidos en la planilla real— el tablero
+seguía girando. No era el servidor: era el dibujo.
+
+El manejador de éxito hacía `configure()`, `renderAll()` y recién al final
+`setBusy(false)`. Si cualquiera de esos pasos reventaba, el velo se quedaba
+puesto **para siempre**, y el `withFailureHandler` de `google.script.run` ni
+se enteraba: solo mira lo que pasa en el servidor. Desde afuera es idéntico a
+una planilla que no responde, y no llega ni un aviso.
+
+La causa más común es tener los archivos desparejos: `Codigo.gs` de una
+versión y los `.html` de otra, así que el servidor manda un campo que el
+dibujo no espera, o el dibujo busca un elemento que todavía no existe en el
+`Index.html` copiado.
+
+Ahora el dibujo va en un `try/catch` que levanta el velo y dice qué falló,
+con la pista de copiar todos los archivos. Y hay una red global: cualquier
+error suelto mientras el tablero está ocupado también levanta el velo. Un
+tablero con un aviso se puede arreglar; uno girando, no.
+
+### El mes que Sheets convertía en fecha
+
+`cerrarMes` escribe `'2026-09'` en la columna Mes. Google Sheets reconoce eso
+como una fecha y lo guarda convertido, así que al releerlo vuelve un `Date` y
+no el texto. El filtro `/^\d{4}-\d{2}$/` descartaba **todas** las filas: la
+hoja `Historico` con 65 registros y el tablero diciendo "0 meses cerrados",
+sin un solo error a la vista.
+
+Arreglado por los dos lados: la columna del mes se deja en formato de texto
+plano al crear la hoja, y `historicoPrefix_` acepta tanto el texto como la
+fecha, así que las filas que ya se escribieron convertidas se leen igual.
+`dropHistoricoMonth_` usa el mismo lector, porque si no, al recerrar un mes
+no habría borrado las filas viejas y el mes se contaría dos veces.
 
 ### Si vuelve a ir lento
 
@@ -693,13 +728,13 @@ que no los usaba nadie.
 
 ## Verificación
 
-`preview/backend.mjs` corre 79 comprobaciones sin navegador: los días hábiles
+`preview/backend.mjs` corre 90 comprobaciones sin navegador: los días hábiles
 de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
 y el solsticio contra fechas oficiales conocidas, el orden de resolución de
 proveedores, la detección de duplicidad, el cierre de mes, la lectura de la
 hoja, el costo del cruce y el rango usado de las hojas.
 
-`preview/pruebas.mjs` corre 96 comprobaciones de interacción sobre
+`preview/pruebas.mjs` corre 100 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
 guardar, informe semanal, histórico y memoria entre sesiones.

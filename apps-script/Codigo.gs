@@ -412,7 +412,7 @@ function getDashboardData(monthPrefix, options) {
 
   const historico = options.skipHistorico
     ? { months: {}, rows: [] }
-    : readHistorico_(spreadsheet);
+    : readHistorico_(spreadsheet, timezone);
 
   // Una sola lectura de la tabla de equivalencias para todo el cruce.
   const homologacion = readHomologacion_(spreadsheet);
@@ -2299,7 +2299,32 @@ function formatApuntesSheet_(sheet) {
 /**
  * Meses cerrados como { '2026-09': { providers: {...}, closedAt, workdays } }.
  */
-function readHistorico_(spreadsheet) {
+/**
+ * El mes de una fila del histórico, como 'yyyy-MM'.
+ *
+ * Se escribe '2026-09', pero Google Sheets lo reconoce como una fecha y lo
+ * guarda convertido: al releerlo vuelve un Date, no el texto. Eso descartaba
+ * todas las filas en silencio —el histórico quedaba con cero meses aunque la
+ * hoja tuviera decenas de filas— así que aquí se aceptan las dos formas.
+ *
+ * @param {*} value         Lo que trae la celda.
+ * @param {string=} timezone
+ * @return {string} 'yyyy-MM', o '' si no se puede leer.
+ */
+function historicoPrefix_(value, timezone) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(
+      value, timezone || CONFIG.TIMEZONE, 'yyyy-MM'
+    );
+  }
+
+  const text = text_(value);
+  const match = text.match(/^(\d{4})-(\d{2})/);
+
+  return match ? match[1] + '-' + match[2] : '';
+}
+
+function readHistorico_(spreadsheet, timezone) {
   const sheet = spreadsheet.getSheetByName(CONFIG.SHEET_HISTORICO);
 
   if (!sheet || sheet.getLastRow() < 2) {
@@ -2314,10 +2339,10 @@ function readHistorico_(spreadsheet) {
   const rows = [];
 
   values.forEach(function(row) {
-    const prefix = text_(row[0]);
+    const prefix = historicoPrefix_(row[0], timezone);
     const provider = text_(row[1]);
 
-    if (!/^\d{4}-\d{2}$/.test(prefix) || !provider) { return; }
+    if (!prefix || !provider) { return; }
 
     if (!months[prefix]) {
       months[prefix] = {
@@ -2458,6 +2483,10 @@ function ensureHistoricoSheet_(spreadsheet) {
 
   sheet.setFrozenRows(1);
 
+  // '2026-09' se parece a una fecha y Sheets lo convierte al escribirlo.
+  // Con la columna en texto plano se guarda tal cual.
+  sheet.getRange(1, 1, sheet.getMaxRows(), 1).setNumberFormat('@');
+
   [90, 230, 110, 120, 140, 110, 110, 100, 190, 140]
     .forEach(function(width, index) {
       sheet.setColumnWidth(index + 1, width);
@@ -2503,7 +2532,7 @@ function cerrarMes(monthPrefix) {
     const author = getActiveUserLabel_();
     const now = new Date();
 
-    dropHistoricoMonth_(sheet, prefix);
+    dropHistoricoMonth_(sheet, prefix, timezone);
 
     const values = summary.map(function(item) {
       return [
@@ -2595,7 +2624,7 @@ function summarizeMonth_(data) {
     });
 }
 
-function dropHistoricoMonth_(sheet, prefix) {
+function dropHistoricoMonth_(sheet, prefix, timezone) {
   if (sheet.getLastRow() < 2) { return; }
 
   const keys = sheet
@@ -2604,7 +2633,10 @@ function dropHistoricoMonth_(sheet, prefix) {
 
   // De abajo hacia arriba: borrar de arriba corre las filas de abajo.
   for (let index = keys.length - 1; index >= 0; index--) {
-    if (text_(keys[index][0]) === prefix) {
+    // Las filas escritas antes de poner la columna en texto quedaron como
+    // fecha; si se comparara el texto crudo no se borrarían y el mes se
+    // contaría dos veces al recerrarlo.
+    if (historicoPrefix_(keys[index][0], timezone) === prefix) {
       sheet.deleteRow(index + 2);
     }
   }
@@ -3394,7 +3426,7 @@ function diagnosticarCarga(monthPrefix) {
   });
 
   const historico = paso('Leer Historico', function() {
-    return readHistorico_(spreadsheet);
+    return readHistorico_(spreadsheet, timezone);
   });
 
   const planResult = paso('Leer Plan', function() {

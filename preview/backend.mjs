@@ -37,7 +37,8 @@ const api = new Function(
     summarizeMonth_, previousMonthPrefix_, mergeAvailableMonths_,
     buildHistoricoSeries_, readHistorico_, HISTORICO_HEADERS,
     readDisplayFallback_, makeMatchContext_, matchRow_,
-    providerSimilarity_, providerComparable_, readPlan_, readApuntes_
+    providerSimilarity_, providerComparable_, readPlan_, readApuntes_,
+    historicoPrefix_
   };`
 )(...Object.values(stubs));
 
@@ -590,6 +591,63 @@ ok('  con sus fechas', [leidos[0].start, leidos[0].end],
 ok('  y sus cifras', [leidos[0].plan, leidos[0].received], [500, 420]);
 ok('no formatea las columnas de texto largo',
    apuntes.formateadas < apuntes.hoja.getLastColumn() * 2, true);
+
+/* ============ el mes que Sheets convirtió en fecha ============ */
+console.log('\n--- el mes que Sheets convirtió en fecha ---');
+
+// cerrarMes escribe '2026-09', pero Google Sheets reconoce eso como una fecha
+// y lo guarda convertido: al releerlo vuelve un Date, no el texto. La hoja
+// quedaba con decenas de filas y el tablero decía "0 meses cerrados", sin un
+// solo error a la vista.
+ok('lee el mes escrito como texto',
+   api.historicoPrefix_('2026-09', 'UTC'), '2026-09');
+ok('lee el mes que Sheets convirtió en fecha',
+   api.historicoPrefix_(new Date(Date.UTC(2026, 8, 1)), 'UTC'), '2026-09');
+ok('lee el mes si quedó con día incluido',
+   api.historicoPrefix_('2026-09-01', 'UTC'), '2026-09');
+ok('un mes de diciembre no se corre de año',
+   api.historicoPrefix_(new Date(Date.UTC(2026, 11, 1)), 'UTC'), '2026-12');
+ok('una celda vacía no inventa un mes',
+   api.historicoPrefix_('', 'UTC'), '');
+ok('un texto cualquiera tampoco',
+   api.historicoPrefix_('septiembre', 'UTC'), '');
+ok('una fecha inválida tampoco',
+   api.historicoPrefix_(new Date('nada'), 'UTC'), '');
+
+// Y la hoja entera se lee igual venga como venga.
+function hojaHistorico(mes) {
+  const filas = [
+    api.HISTORICO_HEADERS.slice(),
+    [mes, 'SAVI', 5000, 4000, 1200, 5200, 1.04, 21, 'comprador', new Date()],
+    [mes, 'DIGUA', 3000, 2400, 0, 2400, 0.8, 21, 'comprador', new Date()]
+  ];
+
+  return {
+    getSheetByName: () => ({
+      getLastRow: () => filas.length,
+      getRange: (fila, col, nfilas, ncols) => ({
+        getValues: () => filas.slice(fila - 1, fila - 1 + nfilas)
+          .map((r) => r.slice(col - 1, col - 1 + ncols))
+      })
+    })
+  };
+}
+
+const comoTextoHist = api.readHistorico_(hojaHistorico('2026-09'), 'UTC');
+const comoFechaHist = api.readHistorico_(
+  hojaHistorico(new Date(Date.UTC(2026, 8, 1))), 'UTC'
+);
+
+ok('la hoja escrita como texto trae su mes',
+   Object.keys(comoTextoHist.months), ['2026-09']);
+ok('la hoja que Sheets convirtió trae el mismo mes',
+   Object.keys(comoFechaHist.months), ['2026-09']);
+ok('  con sus dos proveedores',
+   Object.keys(comoFechaHist.months['2026-09'].providers).sort(),
+   ['DIGUA', 'SAVI']);
+ok('  y las mismas cifras',
+   comoFechaHist.rows.map((r) => r.total),
+   comoTextoHist.rows.map((r) => r.total));
 
 console.log(`\n${passed} pasan, ${failed} fallan`);
 process.exit(failed ? 1 : 0);

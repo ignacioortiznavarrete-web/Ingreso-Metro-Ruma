@@ -521,6 +521,45 @@ ok('cuantifica el exceso',
 ok('avisa de los proveedores parecidos',
    await q.locator('.dup-pair').count() === 1);
 
+/* ============ el velo nunca se queda puesto ============ */
+
+// Esto es lo que hacía parecer que la planilla no respondía: un error al
+// dibujar revienta antes de setBusy(false), y el withFailureHandler de
+// google.script.run solo mira lo que pasa en el servidor. Desde afuera es
+// idéntico a una planilla colgada, y no llega ni un aviso.
+const vela = await c3.newPage();
+await vela.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
+await vela.goto('file:///home/user/Ingreso-Metro-Ruma/preview/out/index.html',
+  { waitUntil: 'networkidle' });
+await vela.waitForSelector('.gauge'); await vela.waitForTimeout(600);
+
+// Se rompe una pieza del dibujo y se pide otro mes.
+await vela.evaluate(() => {
+  window.renderDetail = function() { throw new Error('prueba: falla al dibujar'); };
+  loadData('2026-08');
+});
+await vela.waitForTimeout(1200);
+
+ok('el velo se levanta aunque falle el dibujo',
+   await vela.locator('#veil').isHidden());
+ok('y dice que el problema fue dibujar, no la planilla',
+   (await vela.locator('#bannerErrorText').innerText()).includes('no pudo dibujarlos'),
+   await vela.locator('#bannerErrorText').innerText());
+ok('con la pista de los archivos desparejos',
+   (await vela.locator('#bannerErrorHint').innerText()).includes('desparejos'));
+
+// Un error suelto, fuera del camino de la carga, tampoco puede dejarlo puesto.
+await vela.evaluate(() => {
+  setBusy(true);
+  setTimeout(() => { throw new Error('prueba: error suelto'); }, 0);
+});
+await vela.waitForTimeout(600);
+
+ok('un error suelto tampoco deja el velo puesto',
+   await vela.locator('#veil').isHidden());
+
+await vela.close();
+
 /* ============ sin desborde horizontal ============ */
 for (const width of [1600, 1280, 390]) {
   const page = await c3.newPage();
