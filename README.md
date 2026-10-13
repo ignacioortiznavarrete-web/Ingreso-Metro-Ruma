@@ -22,8 +22,9 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/Bitacora.html` | Mapa semanal, apuntes e informe de la semana. | ~970 |
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
-| `preview/pruebas.mjs` | 100 comprobaciones de interacción sobre la copia autónoma. | |
-| `preview/backend.mjs` | 90 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja, costo del cruce y rango usado. | |
+| `preview/pruebas.mjs` | 109 comprobaciones de interacción sobre la copia autónoma. | |
+| `preview/backend.mjs` | 91 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja, costo del cruce y rango usado. | |
+| `preview/simbolos.mjs` | Busca funciones que se llaman pero no existen. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -49,8 +50,9 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/backend.mjs        # 90 comprobaciones del backend, sin navegador
-node preview/pruebas.mjs        # 100 comprobaciones de interacción sobre Chromium
+node preview/simbolos.mjs       # funciones que se llaman pero no existen
+node preview/backend.mjs        # 91 comprobaciones del backend, sin navegador
+node preview/pruebas.mjs        # 109 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
 
@@ -324,6 +326,30 @@ Ahora el dibujo va en un `try/catch` que levanta el velo y dice qué falló,
 con la pista de copiar todos los archivos. Y hay una red global: cualquier
 error suelto mientras el tablero está ocupado también levanta el velo. Un
 tablero con un aviso se puede arreglar; uno girando, no.
+
+### Funciones fantasma
+
+El try/catch del velo hizo aparecer el error de verdad:
+`setChartEmpty is not defined`. La función se llamaba en cuatro sitios y no
+estaba definida en ninguna parte. Antes había pasado lo mismo con `setText`.
+
+En Apps Script los módulos HTML comparten un único ámbito global, así que
+nada avisa: el error salta recién cuando la rama se ejecuta. Y las dos veces
+fue en ramas que los datos simulados nunca tocaban —la vista sin meses
+cerrados, el gráfico sin días hábiles suficientes— así que las pruebas pasaban
+en verde con el error adentro.
+
+Se arregló por los dos lados:
+
+- **`preview/simbolos.mjs`** recorre los módulos como texto y compara lo que
+  se llama contra lo que se define, sin ejecutar nada. Corre dentro de
+  `backend.mjs`, así que una función fantasma ya no puede llegar a la
+  planilla. Comprobado al revés: renombrando `setChartEmpty` a mano, el
+  detector la encuentra en sus cuatro sitios.
+- **Las ramas vacías ahora se prueban de verdad.** `pruebas.mjs` fuerza el
+  tablero a los cuatro estados que el mes de prueba no alcanza: sin meses
+  cerrados, con un solo mes cerrado, y el primer día hábil del mes para la
+  brecha diaria y la mancuerna de ritmo.
 
 ### El mes que Sheets convertía en fecha
 
@@ -728,13 +754,13 @@ que no los usaba nadie.
 
 ## Verificación
 
-`preview/backend.mjs` corre 90 comprobaciones sin navegador: los días hábiles
+`preview/backend.mjs` corre 91 comprobaciones sin navegador: los días hábiles
 de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
 y el solsticio contra fechas oficiales conocidas, el orden de resolución de
 proveedores, la detección de duplicidad, el cierre de mes, la lectura de la
 hoja, el costo del cruce y el rango usado de las hojas.
 
-`preview/pruebas.mjs` corre 100 comprobaciones de interacción sobre
+`preview/pruebas.mjs` corre 109 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,
 guardado de apuntes con ida y vuelta de las cifras, guardia de cambios sin
 guardar, informe semanal, histórico y memoria entre sesiones.

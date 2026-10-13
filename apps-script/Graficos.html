@@ -15,6 +15,24 @@ function px(host) {
   return Math.max(320, host.clientWidth || 640);
 }
 
+/**
+ * Deja un gráfico vacío con su explicación.
+ *
+ * Un gráfico que no se puede dibujar todavía tiene que decir por qué: en
+ * blanco se lee como una falla. Además devuelve el contenedor a su clase
+ * base, porque el que se dibujó antes pudo haber quedado con 'chart-auto'
+ * o con el alto de su SVG.
+ *
+ * @param {!Element} host
+ * @param {string} message  Texto plano; se escapa al insertarlo.
+ */
+function setChartEmpty(host, message) {
+  if (!host) { return; }
+
+  host.className = 'chart';
+  host.innerHTML = '<div class="chart-empty">' + esc(message) + '</div>';
+}
+
 /* Escalones del techo del eje. Con solo 1-2-5-10 el salto es demasiado
    grande: un máximo de 2.754 subía a 5.000 y el eje desperdiciaba casi la
    mitad de su alto, así que las barras salían chicas y el gráfico parecía

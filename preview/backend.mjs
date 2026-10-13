@@ -10,6 +10,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -648,6 +649,25 @@ ok('  con sus dos proveedores',
 ok('  y las mismas cifras',
    comoFechaHist.rows.map((r) => r.total),
    comoTextoHist.rows.map((r) => r.total));
+
+/* ============ funciones fantasma ============ */
+console.log('\n--- funciones fantasma ---');
+
+// En Apps Script los módulos HTML comparten un único ámbito global, así que
+// nada avisa de una función que no existe: el error salta recién cuando la
+// rama se ejecuta de verdad, y ahí el velo de carga se queda puesto. Pasó dos
+// veces, setText y setChartEmpty, las dos en ramas que los datos simulados no
+// tocaban. El detector vive en simbolos.mjs; aquí se le exige que corra.
+const fantasmas = (() => {
+  try {
+    execFileSync('node', [join(here, 'simbolos.mjs')], { encoding: 'utf8' });
+    return '';
+  } catch (error) {
+    return String(error.stdout || error.message).trim();
+  }
+})();
+
+ok('ninguna función se llama sin estar definida', fantasmas, '');
 
 console.log(`\n${passed} pasan, ${failed} fallan`);
 process.exit(failed ? 1 : 0);

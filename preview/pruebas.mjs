@@ -521,6 +521,81 @@ ok('cuantifica el exceso',
 ok('avisa de los proveedores parecidos',
    await q.locator('.dup-pair').count() === 1);
 
+/* ============ estados vacíos ============ */
+
+// Aquí se escapó setChartEmpty: son las ramas que los datos simulados nunca
+// tocan, porque el mes de prueba siempre tiene días hábiles corridos y
+// siempre hay meses cerrados. Un gráfico que no se puede dibujar todavía
+// tiene que decir por qué, no quedarse en blanco ni reventar.
+const vacia = await c3.newPage();
+const erroresVacios = [];
+vacia.on('pageerror', (e) => erroresVacios.push(e.message));
+await vacia.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
+await vacia.goto('file:///home/user/Ingreso-Metro-Ruma/preview/out/index.html',
+  { waitUntil: 'networkidle' });
+await vacia.waitForSelector('.gauge'); await vacia.waitForTimeout(600);
+
+// Sin ningún mes cerrado.
+await vacia.evaluate(() => {
+  DATA.historico = { months: [], providers: {}, prefixes: [] };
+  renderAll();
+});
+await vacia.waitForTimeout(500);
+await vacia.click('#tab-historico'); await vacia.waitForTimeout(500);
+
+ok('sin meses cerrados avisa en vez de quedarse en blanco',
+   await vacia.locator('#historicoEmpty').isVisible());
+ok('y explica cómo cerrar un mes',
+   (await vacia.locator('#historicoEmptyText').innerText()).includes('Cerrar el mes'));
+ok('el gráfico de meses dice por qué está vacío',
+   (await vacia.locator('#chartHistMes .chart-empty').innerText())
+     .includes('meses cerrados'),
+   await vacia.locator('#chartHistMes .chart-empty').innerText());
+ok('la tabla de trayectoria no queda colgada',
+   (await vacia.locator('#histCount').innerText()).includes('sin meses'));
+
+// Con un solo mes cerrado no hay tendencia que mostrar.
+await vacia.evaluate(() => {
+  DATA.historico = {
+    months: [{ prefix: '2026-08', label: 'agosto de 2026', plan: 1000,
+               actual: 800, gmail: 150, total: 950, compliance: 0.95,
+               providers: 1, workdays: 21, closed: true }],
+    providers: { SAVI: { '2026-08': { plan: 1000, total: 950, compliance: 0.95 } } },
+    prefixes: ['2026-08']
+  };
+  renderAll();
+});
+await vacia.waitForTimeout(500);
+
+ok('con un solo mes la tendencia avisa que faltan datos',
+   (await vacia.locator('#chartHistCumpl .chart-empty').innerText())
+     .includes('dos meses'),
+   await vacia.locator('#chartHistCumpl .chart-empty').innerText());
+ok('pero el gráfico de barras sí dibuja ese mes',
+   await vacia.locator('#chartHistMes rect.bar-grow').count() >= 1);
+
+// El primer día hábil del mes: todavía no hay dos puntos que comparar.
+await vacia.evaluate(() => {
+  var wd = DATA.workdays;
+  wd.referenceDate = wd.workdayKeys[0];
+  wd.elapsed = 1;
+  renderAll();
+});
+await vacia.waitForTimeout(500);
+await vacia.click('#tab-panorama'); await vacia.waitForTimeout(700);
+
+ok('el primer día la brecha diaria avisa en vez de quedarse en blanco',
+   await vacia.locator('#chartGapTrend .chart-empty').count() === 1,
+   await vacia.locator('#chartGapTrend').innerText());
+ok('el primer día la mancuerna de ritmo avisa',
+   await vacia.locator('#chartPace .chart-empty').count() === 1,
+   await vacia.locator('#chartPace').innerText());
+
+ok('ningún estado vacío revienta', erroresVacios.length === 0,
+   erroresVacios.join(' | ') || 'sin errores');
+
+await vacia.close();
+
 /* ============ el velo nunca se queda puesto ============ */
 
 // Esto es lo que hacía parecer que la planilla no respondía: un error al
