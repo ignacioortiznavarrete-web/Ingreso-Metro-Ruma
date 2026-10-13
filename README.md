@@ -23,7 +23,7 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
 | `preview/pruebas.mjs` | 96 comprobaciones de interacción sobre la copia autónoma. | |
-| `preview/backend.mjs` | 64 comprobaciones del backend: calendario, homologación, histórico y lectura de la hoja. | |
+| `preview/backend.mjs` | 70 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja y costo del cruce. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -49,7 +49,7 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/backend.mjs        # 64 comprobaciones del backend, sin navegador
+node preview/backend.mjs        # 70 comprobaciones del backend, sin navegador
 node preview/pruebas.mjs        # 96 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
@@ -226,6 +226,43 @@ Script corta la ejecución a los seis minutos **sin avisarle al navegador**.
 El `google.script.run` nunca llama a su `withSuccessHandler` ni a su
 `withFailureHandler`, así que el velo de carga se queda puesto.
 
+### Lo que de verdad se comía los seis minutos
+
+Estrechar la lectura ayudó, pero no era el grueso. El grueso era el **cruce
+aproximado**: para cada fila de SAP, comparar su nombre contra cada proveedor
+del Plan con una matriz de distancia de edición.
+
+Se memoizaba, pero por `proveedor + predio + rol`. En el bosque el predio y el
+rol cambian casi en cada fila, así que la memoria no acertaba nunca: la matriz
+se armaba una vez por fila **y por proveedor del Plan**. Con 8.000 filas y 25
+proveedores son 200.000 matrices por carga, y crece lineal con las filas — por
+eso cargar octubre encima de septiembre fue justo lo que lo tiró al corte.
+
+El parecido solo depende del nombre, no del predio. Ahora se memoiza por
+nombre, con un contexto que vive toda la carga: 600 barridos del Plan pasaron
+a 3. Además la tabla de palabras vacías se armaba de nuevo en cada llamada, y
+la distancia de edición se calculaba aunque el parecido por tokens ya hiciera
+imposible pasar el umbral; las dos cosas están cortadas.
+
+Medido sobre la carga completa con 8.000 filas por mes, en Node:
+
+| | septiembre | octubre |
+|---|---|---|
+| Antes | 10.804 ms | 9.966 ms |
+| Ahora | 398 ms | 242 ms |
+
+El motor de Apps Script es bastante más lento que el de Node, así que esos
+diez segundos eran minutos de verdad. Con 30.000 filas por mes la carga sigue
+bajo el segundo.
+
+El atajo de la distancia de edición es **exacto**, no una aproximación: lo que
+devuelve al saltarse el cálculo nunca alcanza el umbral, así que ninguna
+decisión de cruce cambia. Se comprueba contra el código anterior en 111 casos,
+incluidos nombres torcidos a propósito a los dos lados del umbral, y en
+`backend.mjs` sobre todos los pares del Plan.
+
+### Y además
+
 Se arregló por los dos lados:
 
 - **Se lee solo lo que se usa.** `getRange(1, 1, lastRow, ancho)` en vez de
@@ -239,6 +276,15 @@ Se arregló por los dos lados:
   `LOAD_TICKET` y un `LOAD_TIMEOUT_MS` de 5,5 minutos: si la respuesta no
   llega, el velo se saca y sale un aviso que dice qué hacer. Una respuesta
   vieja que llega tarde ya no pisa a la nueva.
+
+### Si vuelve a ir lento
+
+En el menú de la planilla, *MetroRuma Dashboard › Medir la carga*.
+`diagnosticarCarga()` corre lo mismo que la carga real pero cronometrando cada
+etapa, y muestra el tamaño de cada hoja, las filas del mes y las etapas
+ordenadas de la más lenta a la más rápida. Cuando el tablero se queda girando
+no hay otra forma de ver por qué: Apps Script corta sin avisarle al navegador,
+así que no llega ni un error.
 
 ### Cerrar el mes
 
@@ -616,11 +662,11 @@ que no los usaba nadie.
 
 ## Verificación
 
-`preview/backend.mjs` corre 64 comprobaciones sin navegador: los días hábiles
+`preview/backend.mjs` corre 70 comprobaciones sin navegador: los días hábiles
 de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
 y el solsticio contra fechas oficiales conocidas, el orden de resolución de
-proveedores, la detección de duplicidad, el cierre de mes y la lectura de la
-hoja.
+proveedores, la detección de duplicidad, el cierre de mes, la lectura de la
+hoja y el costo del cruce.
 
 `preview/pruebas.mjs` corre 96 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,

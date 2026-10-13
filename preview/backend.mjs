@@ -36,7 +36,8 @@ const api = new Function(
     findDuplicateRows_, findSimilarProviders_, fmtNumber_,
     summarizeMonth_, previousMonthPrefix_, mergeAvailableMonths_,
     buildHistoricoSeries_, readHistorico_, HISTORICO_HEADERS,
-    readDisplayFallback_
+    readDisplayFallback_, makeMatchContext_, matchRow_,
+    providerSimilarity_, providerComparable_
   };`
 )(...Object.values(stubs));
 
@@ -364,6 +365,131 @@ const alBorde = hojaStub();
 api.readDisplayFallback_(alBorde, typed, 3, 5, [4], () => true);
 ok('no pide más allá del ancho de la hoja',
    alBorde.calls[0].column + alBorde.calls[0].columns - 1, 5);
+
+/* ============ costo del cruce ============ */
+console.log('\n--- costo del cruce ---');
+
+// Esto es lo que colgaba el tablero. El cruce aproximado arma una matriz de
+// distancia de edición contra cada proveedor del Plan. Se memoizaba por
+// proveedor + predio + rol, pero en el bosque el predio y el rol cambian casi
+// en cada fila: la memoria no acertaba nunca y la matriz se armaba una vez por
+// fila. Con un mes eran algunos miles; con dos, el doble, y Apps Script corta
+// a los seis minutos sin avisarle al navegador.
+const PLAN_LARGO = [
+  'SAVI', 'DIGUA', 'LLOHUE', 'NAHUELTORO', 'SAN FRANCISCO', 'CHAPALES',
+  'SAN ANTONIO', 'RANCHILLO', 'LA MONTANA', 'PROMASA', 'QUILODRAN',
+  'H. SILVA', 'H. ZENTENO', 'D. RODRIGUEZ', 'ALSAL'
+];
+
+const NOMBRES_SAP = PLAN_LARGO.map((n) => `INMOB FORESTAL E INVER ${n} LTDA`);
+
+function filasSimuladas(total) {
+  return Array.from({ length: total }, (unused, i) => ({
+    raw: NOMBRES_SAP[i % NOMBRES_SAP.length],
+    // Alta cardinalidad a propósito: es lo que rompía la memoria vieja.
+    predio: `FUNDO ${i % 900}`,
+    rol: `${100 + (i % 1700)}-${i % 40}`
+  }));
+}
+
+// El parecido solo depende del nombre, así que miles de filas del mismo
+// proveedor con miles de predios distintos tienen que barrer el Plan una sola
+// vez por nombre. Se cuentan los barridos, que es lo que cuesta caro.
+function barridos(usarContexto) {
+  let veces = 0;
+
+  const espia = new Proxy(PLAN_LARGO, {
+    get(target, prop) {
+      if (prop === 'forEach') { veces++; }
+      return Reflect.get(target, prop);
+    }
+  });
+
+  const filas = filasSimuladas(3000);
+
+  if (usarContexto) {
+    const c = api.makeMatchContext_(espia, {}, 'INGRESOS');
+    // El contexto precalcula las formas de los candidatos: ese barrido no
+    // es del cruce, así que no cuenta.
+    veces = 0;
+    filas.forEach((row) => { api.matchRow_(c, row.raw, row.predio, row.rol); });
+  } else {
+    filas.forEach((row) => {
+      api.resolveProvider_(row.raw, {
+        aliases: {}, predio: row.predio, rol: row.rol, candidates: espia
+      });
+    });
+  }
+
+  return veces;
+}
+
+const sinContexto = barridos(false);
+const conContexto = barridos(true);
+
+// Los demás nombres los atrapa antes una regla explícita del código, así que
+// nunca llegan al cruce aproximado.
+ok('sin contexto compartido barre el Plan una vez por fila',
+   sinContexto > 500, true);
+ok('con contexto compartido barre una vez por nombre',
+   conContexto <= NOMBRES_SAP.length, true);
+console.log(`      (${sinContexto} barridos antes, ${conContexto} ahora)`);
+
+// Y el resultado tiene que ser el mismo que sin memoria.
+const sinMemoria = filasSimuladas(40).map((row) =>
+  api.resolveProvider_(row.raw, {
+    aliases: {}, predio: row.predio, rol: row.rol, candidates: PLAN_LARGO
+  }).provider);
+
+const conMemoria = (() => {
+  const c = api.makeMatchContext_(PLAN_LARGO, {}, 'INGRESOS');
+  return filasSimuladas(40).map((row) =>
+    api.matchRow_(c, row.raw, row.predio, row.rol).provider);
+})();
+
+ok('la memoria no cambia a quién cruza', conMemoria, sinMemoria);
+
+// El atajo de la distancia de edición es exacto: lo que devuelve al saltarse
+// el cálculo nunca alcanza el piso, así que ninguna decisión cambia.
+const paresDePrueba = [];
+PLAN_LARGO.forEach((a) => {
+  PLAN_LARGO.forEach((b) => { paresDePrueba.push([a, b]); });
+  paresDePrueba.push([a, `SOC ${a} SPA`]);
+  paresDePrueba.push([a, a.slice(0, Math.max(3, a.length - 2))]);
+  paresDePrueba.push([a, a.split('').reverse().join('')]);
+  paresDePrueba.push([a, `COMERCIAL ${a.replace(/A/g, 'E')}`]);
+});
+
+const PISO = 0.8;
+const desacuerdos = paresDePrueba.filter(([a, b]) => {
+  const x = api.providerComparable_(a);
+  const y = api.providerComparable_(b);
+
+  return (api.providerSimilarity_(x, y) >= PISO) !==
+         (api.providerSimilarity_(x, y, PISO) >= PISO);
+});
+
+ok('el atajo no cambia ninguna decisión del umbral',
+   desacuerdos.length, 0);
+
+// Sin piso el parecido tiene que seguir siendo el de siempre, exacto.
+ok('sin piso, el parecido no cambia',
+   api.providerSimilarity_('SAVI', 'SAVI LTDA').toFixed(6),
+   api.providerSimilarity_('SAVI', 'SAVI LTDA', 0).toFixed(6));
+
+// La red de seguridad: un mes grande tiene que cruzarse en un parpadeo. El
+// umbral es generoso a propósito —esta máquina no es la de Apps Script—, pero
+// atrapa una regresión de orden de magnitud, que es la que rompe el tablero.
+const inicio = Date.now();
+const ctxGrande = api.makeMatchContext_(PLAN_LARGO, {}, 'INGRESOS');
+filasSimuladas(20000).forEach((row) => {
+  api.matchRow_(ctxGrande, row.raw, row.predio, row.rol);
+});
+const transcurrido = Date.now() - inicio;
+
+ok('20.000 filas se cruzan en menos de 2 segundos',
+   transcurrido < 2000, true);
+console.log(`      (${transcurrido} ms)`);
 
 console.log(`\n${passed} pasan, ${failed} fallan`);
 process.exit(failed ? 1 : 0);

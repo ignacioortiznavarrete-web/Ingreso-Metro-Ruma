@@ -351,6 +351,7 @@ function onOpen() {
     .addItem('Cerrar el mes anterior', 'cerrarMesAnterior')
     .addItem('Equivalencias de proveedor', 'abrirHomologacion')
     .addItem('Diagnosticar cruce de proveedores', 'diagnosticarCruceProveedores')
+    .addItem('Medir la carga', 'diagnosticarCarga')
     .addToUi();
 }
 
@@ -1000,7 +1001,7 @@ function readIngresos_(spreadsheet, timezone, month, planCandidates, aliases) {
     }
   );
 
-  const cache = {};
+  const match_ = makeMatchContext_(planCandidates, aliases, 'INGRESOS');
   const rows = [];
 
   for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
@@ -1021,20 +1022,7 @@ function readIngresos_(spreadsheet, timezone, month, planCandidates, aliases) {
     const predio = text_(row[columns.PREDIO]);
     const rol = text_(row[columns.ROL]);
 
-    // El cruce difuso es caro: se memoiza por combinación proveedor+predio+rol.
-    const cacheKey = providerRaw + '|' + predio + '|' + rol;
-
-    if (!cache[cacheKey]) {
-      cache[cacheKey] = resolveProvider_(providerRaw, {
-        source: 'INGRESOS',
-        aliases: aliases,
-        predio: predio,
-        rol: rol,
-        candidates: planCandidates
-      });
-    }
-
-    const match = cache[cacheKey];
+    const match = matchRow_(match_, providerRaw, predio, rol);
 
     rows.push({
       fecha: dateKey,
@@ -1801,6 +1789,7 @@ function readGmailProviderRows_(
     }
   );
 
+  const match_ = makeMatchContext_(planCandidates, aliases, 'GMAIL');
   const messagesByDate = {};
 
   for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
@@ -1857,12 +1846,7 @@ function readGmailProviderRows_(
             displayRow[headerMap['score coincidencia']]
           )
         }
-      : resolveProvider_(providerRaw, {
-          source: 'GMAIL',
-          aliases: aliases,
-          rol: text_(row[headerMap['rol']]),
-          candidates: planCandidates
-        });
+      : matchRow_(match_, providerRaw, '', text_(row[headerMap['rol']]));
 
     messagesByDate[dateKey].rows.push({
       fecha: dateKey,
@@ -2831,6 +2815,52 @@ function abrirHomologacion() {
   );
 }
 
+/**
+ * Contexto del cruce que se comparte durante toda una carga.
+ *
+ * El cruce aproximado era lo que colgaba el tablero. Se memoizaba por
+ * proveedor + predio + rol, pero el predio y el rol cambian casi en cada
+ * fila: la memoria no acertaba nunca y la matriz de distancia de edición
+ * se armaba una vez por fila y por proveedor del Plan. Con un mes son
+ * algunos miles de matrices; con dos, el doble, y Apps Script corta a los
+ * seis minutos.
+ *
+ * El parecido solo depende del nombre, así que se memoiza por nombre. El
+ * predio y el rol siguen entrando, pero solo en specialProvider_, que son
+ * comparaciones de texto baratas.
+ *
+ * @param {!Array<string>} candidates  Proveedores del Plan.
+ * @param {!Object} aliases            Equivalencias guardadas.
+ * @param {string} source              'INGRESOS' o 'GMAIL'.
+ */
+function makeMatchContext_(candidates, aliases, source) {
+  const list = candidates || [];
+
+  return {
+    source: source,
+    aliases: aliases || {},
+    candidates: list,
+    candidateForms: list.map(function(name) {
+      return providerComparable_(name);
+    }),
+    fuzzyCache: {},
+    predio: '',
+    rol: ''
+  };
+}
+
+/**
+ * Resuelve una fila sobre el contexto compartido. El predio y el rol son
+ * lo único que cambia fila a fila, así que se escriben encima en vez de
+ * armar un objeto nuevo cada vez.
+ */
+function matchRow_(context, rawName, predio, rol) {
+  context.predio = predio || '';
+  context.rol = rol || '';
+
+  return resolveProvider_(rawName, context);
+}
+
 function resolveProvider_(rawName, context) {
   context = context || {};
 
@@ -2858,11 +2888,24 @@ function resolveProvider_(rawName, context) {
   const cleaned = providerComparable_(raw);
   const candidates = context.candidates || [];
 
+  // 3. Cruce aproximado. Es lo más caro del backend —una matriz de
+  // distancia de edición contra cada proveedor del Plan— y solo depende
+  // del nombre, así que se memoiza por nombre durante toda la carga.
+  const memo = context.fuzzyCache;
+
+  if (memo && memo.hasOwnProperty(cleaned)) {
+    return memo[cleaned];
+  }
+
+  const forms = context.candidateForms;
+
   let best = null;
 
-  candidates.forEach(function(candidate) {
+  candidates.forEach(function(candidate, index) {
     const score = providerSimilarity_(
-      cleaned, providerComparable_(candidate)
+      cleaned,
+      forms ? forms[index] : providerComparable_(candidate),
+      CONFIG.FUZZY_THRESHOLD
     );
 
     if (!best || score > best.score) {
@@ -2870,6 +2913,14 @@ function resolveProvider_(rawName, context) {
     }
   });
 
+  const result = fuzzyOutcome_(best, cleaned, rawName);
+
+  if (memo) { memo[cleaned] = result; }
+
+  return result;
+}
+
+function fuzzyOutcome_(best, cleaned, rawName) {
   if (best && best.score >= CONFIG.FUZZY_THRESHOLD) {
     return {
       provider: best.provider,
@@ -2965,26 +3016,50 @@ function specialProvider_(raw, predio, group, rol) {
   return '';
 }
 
-function providerComparable_(value) {
-  const stopWords = {
-    SA: true, SPA: true, LTDA: true, LIMITADA: true, CIA: true,
-    COMPANIA: true, SOCIEDAD: true, EMPRESA: true, EMPRESAS: true,
-    SERV: true, SERVICIO: true, SERVICIOS: true, AGRICOLA: true,
-    FORESTAL: true, COMERCIAL: true, INMOBILIARIA: true,
-    INVERSIONES: true, E: true, Y: true, DE: true, DEL: true,
-    LA: true, EL: true
-  };
+const PROVIDER_STOP_WORDS = Object.freeze({
+  SA: true, SPA: true, LTDA: true, LIMITADA: true, CIA: true,
+  COMPANIA: true, SOCIEDAD: true, EMPRESA: true, EMPRESAS: true,
+  SERV: true, SERVICIO: true, SERVICIOS: true, AGRICOLA: true,
+  FORESTAL: true, COMERCIAL: true, INMOBILIARIA: true,
+  INVERSIONES: true, E: true, Y: true, DE: true, DEL: true,
+  LA: true, EL: true
+});
 
-  return normalizeKey_(value)
+// El mismo puñado de nombres vuelve en miles de filas. Antes la tabla de
+// palabras vacías se armaba de nuevo en cada llamada.
+const PROVIDER_COMPARABLE_CACHE = {};
+
+function providerComparable_(value) {
+  const raw = String(value || '');
+
+  if (PROVIDER_COMPARABLE_CACHE.hasOwnProperty(raw)) {
+    return PROVIDER_COMPARABLE_CACHE[raw];
+  }
+
+  const comparable = normalizeKey_(raw)
     .split(' ')
     .filter(function(token) {
-      return token && !stopWords[token];
+      return token && !PROVIDER_STOP_WORDS[token];
     })
     .join(' ')
     .trim();
+
+  PROVIDER_COMPARABLE_CACHE[raw] = comparable;
+
+  return comparable;
 }
 
-function providerSimilarity_(a, b) {
+/**
+ * Parecido entre dos nombres de proveedor, entre 0 y 1.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @param {number=} floor  Piso que el llamador exige. Permite saltarse la
+ *     distancia de edición —lo caro— cuando el resultado ya no puede
+ *     alcanzarlo. El atajo es exacto: lo que se devuelve al saltar nunca
+ *     llega al piso, así que ninguna decisión cambia.
+ */
+function providerSimilarity_(a, b, floor) {
   if (!a || !b) { return 0; }
   if (a === b) { return 1; }
 
@@ -2997,6 +3072,12 @@ function providerSimilarity_(a, b) {
 
   const union = uniqueTokens_(tokensA.concat(tokensB).join(' ')).length;
   const jaccard = union ? intersection / union : 0;
+
+  // Con edit = 1 (el máximo), el resultado no pasa de esto.
+  const techo = Math.max(jaccard, 0.55 * jaccard + 0.45);
+
+  if (floor && techo < floor) { return jaccard; }
+
   const edit = 1 - levenshtein_(a, b) / Math.max(a.length, b.length);
 
   return Math.max(jaccard, 0.55 * jaccard + 0.45 * edit);
@@ -3088,7 +3169,7 @@ function buildUnmatchedProviders_(planRows, dataRows, planCandidates) {
 
       candidates.forEach(function(candidate) {
         const score = providerSimilarity_(
-          probe, providerComparable_(candidate)
+          probe, providerComparable_(candidate), CONFIG.FUZZY_THRESHOLD
         );
 
         if (!best || score > best.score) {
@@ -3131,7 +3212,9 @@ function findSimilarProviders_(providers) {
     for (let j = i + 1; j < prepared.length; j++) {
       if (!prepared[i].key || !prepared[j].key) { continue; }
 
-      const score = providerSimilarity_(prepared[i].key, prepared[j].key);
+      const score = providerSimilarity_(
+        prepared[i].key, prepared[j].key, UMBRAL
+      );
 
       if (score >= UMBRAL) {
         pairs.push({
@@ -3198,6 +3281,137 @@ function findDuplicateRows_(rows) {
   });
 
   return groups.sort(function(a, b) { return b.exceso - a.exceso; });
+}
+
+/**
+ * Cronómetro de la carga, por etapa.
+ *
+ * Cuando el tablero se queda girando no hay forma de ver por qué: Apps
+ * Script corta a los seis minutos sin avisarle al navegador, así que el
+ * velo se queda puesto y no llega ni un error. Esto corre lo mismo que
+ * hace getDashboardData pero midiendo cada paso, y dice cuál se come el
+ * tiempo y cuántas filas mueve.
+ *
+ * Se corre desde el menú: MetroRuma Dashboard › Medir la carga.
+ */
+function diagnosticarCarga(monthPrefix) {
+  const inicio = Date.now();
+  const pasos = [];
+
+  const paso = function(nombre, fn) {
+    const desde = Date.now();
+    const valor = fn();
+
+    pasos.push({ nombre: nombre, ms: Date.now() - desde });
+
+    return valor;
+  };
+
+  const spreadsheet = paso('Abrir la planilla', function() {
+    return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  });
+
+  const timezone = spreadsheet.getSpreadsheetTimeZone() || CONFIG.TIMEZONE;
+  const currentPrefix = Utilities.formatDate(new Date(), timezone, 'yyyy-MM');
+  const month = buildMonthWindow_(
+    /^\d{4}-\d{2}$/.test(String(monthPrefix || '')) ? monthPrefix : currentPrefix
+  );
+
+  const tamanos = [];
+
+  [CONFIG.SHEET_PLAN, CONFIG.SHEET_INGRESOS, CONFIG.SHEET_GMAIL,
+   CONFIG.SHEET_HISTORICO, CONFIG.SHEET_HOMOLOGACION, CONFIG.SHEET_APUNTES]
+    .forEach(function(nombre) {
+      const hoja = spreadsheet.getSheetByName(nombre);
+
+      tamanos.push(
+        '  ' + nombre + ': ' +
+        (hoja
+          ? fmtNumber_(Math.max(0, hoja.getLastRow() - 1)) + ' filas × ' +
+            hoja.getLastColumn() + ' columnas'
+          : 'no existe')
+      );
+    });
+
+  const homologacion = paso('Leer Homologacion', function() {
+    return readHomologacion_(spreadsheet);
+  });
+
+  const historico = paso('Leer Historico', function() {
+    return readHistorico_(spreadsheet);
+  });
+
+  const planResult = paso('Leer Plan', function() {
+    return readPlan_(spreadsheet, month, homologacion.map);
+  });
+
+  const planCandidates = planResult.rows.map(function(item) {
+    return item.provider;
+  });
+
+  const ingresosResult = paso('Leer Ingresos y cruzar', function() {
+    return readIngresos_(
+      spreadsheet, timezone, month, planCandidates, homologacion.map
+    );
+  });
+
+  const gmailResult = paso('Leer Informegmail y cruzar', function() {
+    return readGmailProviderRows_(
+      spreadsheet, timezone, month, planCandidates, homologacion.map
+    );
+  });
+
+  const apuntes = paso('Leer Apuntes', function() {
+    return readApuntes_(spreadsheet);
+  });
+
+  const combinadas = ingresosResult.rows.concat(
+    buildSupplementRows_(ingresosResult.rows, gmailResult.rows).rows
+  );
+
+  paso('Buscar filas repetidas', function() {
+    return findDuplicateRows_(combinadas);
+  });
+
+  const total = Date.now() - inicio;
+
+  pasos.sort(function(a, b) { return b.ms - a.ms; });
+
+  const lines = [
+    'Medición de la carga',
+    '',
+    'Mes: ' + cap_(month.label),
+    'Total: ' + (total / 1000).toFixed(1) + ' s' +
+      (total > 300000
+        ? '  ← Apps Script corta a los 6 minutos (360 s)'
+        : (total > 60000 ? '  ← va lento' : '')),
+    '',
+    'Tamaño de las hojas',
+  ].concat(tamanos).concat([
+    '',
+    'Filas del mes: ' + fmtNumber_(ingresosResult.rows.length) +
+      ' de Ingresos, ' + fmtNumber_(gmailResult.rows.length) + ' de Gmail, ' +
+      fmtNumber_(apuntes.length) + ' apuntes',
+    'Proveedores del Plan: ' + planResult.rows.length,
+    'Equivalencias guardadas: ' + homologacion.rows.length,
+    'Meses cerrados: ' + Object.keys(historico.months).length,
+    '',
+    'Etapas, de la más lenta a la más rápida'
+  ]).concat(pasos.map(function(item) {
+    return '  ' + (item.ms / 1000).toFixed(1) + ' s  ' + item.nombre;
+  }));
+
+  const texto = lines.join('\n');
+
+  console.log(texto);
+
+  try {
+    SpreadsheetApp.getUi().alert(texto);
+  } catch (error) {
+    // Sin interfaz (corrido desde el editor): queda en el registro.
+  }
+
+  return texto;
 }
 
 function diagnosticarCruceProveedores() {
