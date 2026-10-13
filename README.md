@@ -23,7 +23,7 @@ Planilla: `1wNCovRpMc7EpZFwk4UeIadTjueLUNf5Ien-gwJ0jPhQ`
 | `apps-script/appsscript.json` | Manifiesto: zona horaria, permisos y publicación web. | |
 | `preview/build.mjs` | Arma una copia autónoma con datos simulados para el navegador. | |
 | `preview/pruebas.mjs` | 96 comprobaciones de interacción sobre la copia autónoma. | |
-| `preview/backend.mjs` | 70 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja y costo del cruce. | |
+| `preview/backend.mjs` | 79 comprobaciones del backend: calendario, homologación, histórico, lectura de la hoja, costo del cruce y rango usado. | |
 | `preview/shot.mjs` | Captura las vistas para revisar el diseño. | |
 
 El frontend está partido por responsabilidad, no por tamaño: cada archivo se
@@ -49,7 +49,7 @@ Los siete archivos HTML son obligatorios: `Index` los une con
 
 ```bash
 node preview/build.mjs          # genera preview/out/index.html con datos simulados
-node preview/backend.mjs        # 70 comprobaciones del backend, sin navegador
+node preview/backend.mjs        # 79 comprobaciones del backend, sin navegador
 node preview/pruebas.mjs        # 96 comprobaciones de interacción sobre Chromium
 node preview/shot.mjs           # captura las cinco vistas, la impresión y el móvil
 ```
@@ -261,6 +261,33 @@ decisión de cruce cambia. Se comprueba contra el código anterior en 111 casos,
 incluidos nombres torcidos a propósito a los dos lados del umbral, y en
 `backend.mjs` sobre todos los pares del Plan.
 
+### El rango usado, el otro foco
+
+`readPlan_` y `readApuntes_` seguían pidiendo `getDisplayValues()` de
+`getDataRange()`, o sea de la hoja entera. Y el rango usado de una hoja puede
+ser muchísimo más grande que sus datos: basta con que alguien haya pintado o
+pegado algo mil filas más abajo. Google lo sigue considerando parte de la
+hoja, y formatear celda por celda un rango así cuesta de verdad.
+
+`readPlan_` era además **la primera lectura de la carga**, que es justo donde
+el velo se quedaba pegado en "leyendo la planilla…".
+
+Ahora el encabezado se pide formateado —es una fila, no cuesta nada— y del
+resto solo la columna del mes, y solo si algún plan no vino como número. Los
+apuntes piden formato nada más de sus columnas de fecha y cifra, no de los
+textos largos del diagnóstico y del plan de acción.
+
+Con un Plan de dos proveedores y 20.000 filas vacías debajo:
+
+| | celdas formateadas por carga |
+|---|---|
+| Antes | 60.078 |
+| Ahora | 3 |
+
+Si una hoja tiene el rango usado inflado, *Medir la carga* lo dice y explica
+cómo achicarlo: seleccionar la primera fila vacía de verdad, `Ctrl+Shift+↓` y
+Editar › Eliminar filas.
+
 ### Y además
 
 Se arregló por los dos lados:
@@ -285,6 +312,10 @@ etapa, y muestra el tamaño de cada hoja, las filas del mes y las etapas
 ordenadas de la más lenta a la más rápida. Cuando el tablero se queda girando
 no hay otra forma de ver por qué: Apps Script corta sin avisarle al navegador,
 así que no llega ni un error.
+
+Escribe **cada etapa apenas termina**, no al final. Si la ejecución muere en
+los seis minutos, el registro de Apps Script igual deja ver hasta dónde llegó
+y qué hoja estaba leyendo; con un aviso al final no quedaría nada.
 
 ### Cerrar el mes
 
@@ -662,11 +693,11 @@ que no los usaba nadie.
 
 ## Verificación
 
-`preview/backend.mjs` corre 70 comprobaciones sin navegador: los días hábiles
+`preview/backend.mjs` corre 79 comprobaciones sin navegador: los días hábiles
 de septiembre en cuatro años distintos (incluido el puente de 2029), la Pascua
 y el solsticio contra fechas oficiales conocidas, el orden de resolución de
 proveedores, la detección de duplicidad, el cierre de mes, la lectura de la
-hoja y el costo del cruce.
+hoja, el costo del cruce y el rango usado de las hojas.
 
 `preview/pruebas.mjs` corre 96 comprobaciones de interacción sobre
 Chromium: carga, filtros, orden de tablas, ficha del proveedor, foco, atajos,

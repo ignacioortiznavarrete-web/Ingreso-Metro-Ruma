@@ -415,9 +415,9 @@ function loadData(monthPrefix) {
     setBusy(false);
     showError(
       'La planilla tardó más de ' + Math.round(LOAD_TIMEOUT_MS / 60000) +
-      ' minutos en responder y Apps Script corta la ejecución ahí. ' +
-      'Suele ser por volumen: las hojas Ingresos e Informegmail se leen ' +
-      'enteras, así que crecen con cada mes que se carga.'
+      ' minutos en responder y Apps Script corta la ejecución ahí, sin ' +
+      'avisar. Para ver en qué etapa se traba: en el menú de la planilla, ' +
+      'MetroRuma Dashboard › Medir la carga.'
     );
   }, LOAD_TIMEOUT_MS);
 
@@ -583,9 +583,10 @@ function errorHint(text) {
   }
 
   if (key.indexOf('tardó más de') !== -1) {
-    return 'Cierra los meses ya terminados desde el menú ' +
-      '"MetroRuma Dashboard › Cerrar el mes": quedan guardados en la hoja ' +
-      'Historico y el tablero deja de releer sus filas una por una.';
+    return 'Lo más común es que alguna hoja tenga el rango usado inflado ' +
+      '—formato o algo pegado mil filas más abajo—: se lee entera en cada ' +
+      'carga. "Medir la carga" lo dice y explica cómo achicarlo. También ' +
+      'ayuda cerrar los meses terminados desde el mismo menú.';
   }
 
   if (key.indexOf('no existe la hoja') !== -1) {

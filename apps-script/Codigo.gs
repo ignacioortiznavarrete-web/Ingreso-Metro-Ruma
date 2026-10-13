@@ -711,9 +711,9 @@ function readPlan_(spreadsheet, month, aliases) {
     return { rows: [], monthColumn: -1, months: [] };
   }
 
-  const range = sheet.getDataRange();
-  const values = range.getValues();
-  const displayed = range.getDisplayValues();
+  const lastRow = sheet.getLastRow();
+  const width = sheet.getLastColumn();
+  const values = sheet.getRange(1, 1, lastRow, width).getValues();
 
   const headerRowIndex = findPlanHeaderRow_(values);
 
@@ -722,7 +722,14 @@ function readPlan_(spreadsheet, month, aliases) {
   }
 
   const header = values[headerRowIndex];
-  const displayedHeader = displayed[headerRowIndex];
+
+  // El encabezado sí se necesita formateado: una columna de mes puede ser
+  // una fecha de verdad que solo se lee como "oct-2026" ya formateada. Es
+  // una fila: cuesta nada. La hoja entera sí costaba, y era la primera
+  // lectura de la carga, justo donde el tablero se quedaba girando.
+  const displayedHeader = sheet
+    .getRange(headerRowIndex + 1, 1, 1, width)
+    .getDisplayValues()[0];
 
   const providerColumn = header.findIndex(function(value) {
     const key = normalizeHeader_(value);
@@ -742,9 +749,20 @@ function readPlan_(spreadsheet, month, aliases) {
     );
   }
 
+  // Del resto de la hoja solo se mira la columna del mes, y solo si algún
+  // plan no vino como número.
+  const displayed = readDisplayFallback_(
+    sheet, values, lastRow, width, [monthColumn],
+    function(row) { return !isFinite(Number(row[monthColumn])); }
+  );
+
   const groupColumn = Math.max(0, providerColumn - 1);
   const aggregate = {};
   let currentGroup = '';
+
+  // El Plan no se cruza contra sí mismo: solo pasa por equivalencias y
+  // reglas explícitas. El contexto se arma una vez igual.
+  const planContext = makeMatchContext_([], aliases, 'PLAN');
 
   for (
     let rowIndex = headerRowIndex + 1;
@@ -752,7 +770,7 @@ function readPlan_(spreadsheet, month, aliases) {
     rowIndex++
   ) {
     const row = values[rowIndex];
-    const displayRow = displayed[rowIndex] || [];
+    const displayRow = (displayed && displayed[rowIndex]) || EMPTY_ROW;
     const groupText = text_(row[groupColumn]);
 
     if (groupText) {
@@ -767,13 +785,10 @@ function readPlan_(spreadsheet, month, aliases) {
 
     const planValue = toNumber_(row[monthColumn], displayRow[monthColumn]);
 
-    const match = resolveProvider_(providerRaw, {
-      source: 'PLAN',
-      aliases: aliases,
-      group: currentGroup,
-      predio: providerRaw,
-      candidates: []
-    });
+    planContext.group = currentGroup;
+    planContext.predio = providerRaw;
+
+    const match = resolveProvider_(providerRaw, planContext);
 
     if (!aggregate[match.provider]) {
       aggregate[match.provider] = {
@@ -2001,20 +2016,35 @@ function readApuntes_(spreadsheet) {
     return [];
   }
 
-  const range = sheet.getDataRange();
-  const values = range.getValues();
-  const displayed = range.getDisplayValues();
+  const lastRow = sheet.getLastRow();
+  const width = sheet.getLastColumn();
+  const values = sheet.getRange(1, 1, lastRow, width).getValues();
   const map = buildHeaderMap_(values[0]);
 
   if (map['id'] === undefined) {
     return [];
   }
 
+  // Los apuntes guardan fechas y marcas de tiempo que solo se leen bien
+  // formateadas, así que aquí el formato sí hace falta, pero únicamente de
+  // esas columnas: pedirlo de la hoja entera formatea también los textos
+  // largos del diagnóstico y del plan de acción, que no lo necesitan.
+  const fechas = ['inicio', 'fin', 'plan semana', 'recibido', 'desvio',
+    'cumplimiento', 'creado', 'actualizado']
+    .map(function(name) { return map[name]; })
+    .filter(function(index) { return index !== undefined; });
+
+  const displayed = fechas.length
+    ? readDisplayFallback_(
+        sheet, values, lastRow, width, fechas, function() { return true; }
+      )
+    : null;
+
   const output = [];
 
   for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
     const row = values[rowIndex];
-    const displayRow = displayed[rowIndex] || [];
+    const displayRow = (displayed && displayed[rowIndex]) || EMPTY_ROW;
     const id = text_(row[map['id']]);
 
     if (!id) {
@@ -3298,14 +3328,24 @@ function diagnosticarCarga(monthPrefix) {
   const inicio = Date.now();
   const pasos = [];
 
+  // Se escribe cada etapa apenas termina. Si la ejecución muere en los seis
+  // minutos, el registro igual deja ver hasta dónde llegó: con un alert al
+  // final no quedaría nada.
   const paso = function(nombre, fn) {
     const desde = Date.now();
     const valor = fn();
+    const ms = Date.now() - desde;
 
-    pasos.push({ nombre: nombre, ms: Date.now() - desde });
+    pasos.push({ nombre: nombre, ms: ms });
+    console.log(
+      '  ' + (ms / 1000).toFixed(1) + ' s  ' + nombre +
+      '   (acumulado ' + ((Date.now() - inicio) / 1000).toFixed(1) + ' s)'
+    );
 
     return valor;
   };
+
+  console.log('Medición de la carga · empieza');
 
   const spreadsheet = paso('Abrir la planilla', function() {
     return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
@@ -3317,21 +3357,37 @@ function diagnosticarCarga(monthPrefix) {
     /^\d{4}-\d{2}$/.test(String(monthPrefix || '')) ? monthPrefix : currentPrefix
   );
 
+  // El rango usado de una hoja puede ser muchísimo más grande que sus datos:
+  // basta con que alguien haya pintado o pegado algo mil filas más abajo.
+  // Leerlo entero es lo que vuelve lenta la carga, así que se avisa.
   const tamanos = [];
+  let inflada = false;
 
   [CONFIG.SHEET_PLAN, CONFIG.SHEET_INGRESOS, CONFIG.SHEET_GMAIL,
    CONFIG.SHEET_HISTORICO, CONFIG.SHEET_HOMOLOGACION, CONFIG.SHEET_APUNTES]
     .forEach(function(nombre) {
       const hoja = spreadsheet.getSheetByName(nombre);
 
+      if (!hoja) {
+        tamanos.push('  ' + nombre + ': no existe');
+        return;
+      }
+
+      const filas = Math.max(0, hoja.getLastRow() - 1);
+      const columnas = hoja.getLastColumn();
+      const celdas = filas * columnas;
+      const grande = celdas > 400000;
+
+      if (grande) { inflada = true; }
+
       tamanos.push(
-        '  ' + nombre + ': ' +
-        (hoja
-          ? fmtNumber_(Math.max(0, hoja.getLastRow() - 1)) + ' filas × ' +
-            hoja.getLastColumn() + ' columnas'
-          : 'no existe')
+        '  ' + nombre + ': ' + fmtNumber_(filas) + ' filas × ' + columnas +
+        ' columnas = ' + fmtNumber_(celdas) + ' celdas' +
+        (grande ? '   ← revisa si el rango usado está inflado' : '')
       );
     });
+
+  console.log(['Tamaño de las hojas'].concat(tamanos).join('\n'));
 
   const homologacion = paso('Leer Homologacion', function() {
     return readHomologacion_(spreadsheet);
@@ -3387,7 +3443,13 @@ function diagnosticarCarga(monthPrefix) {
         : (total > 60000 ? '  ← va lento' : '')),
     '',
     'Tamaño de las hojas',
-  ].concat(tamanos).concat([
+  ].concat(tamanos).concat(inflada ? [
+    '',
+    'Una hoja con muchas más celdas que datos hace lenta cada carga. Para',
+    'achicar el rango usado: selecciona la primera fila vacía de verdad, ',
+    'Ctrl+Shift+↓ para llegar al final, y Editar › Eliminar filas. Lo mismo',
+    'con las columnas de la derecha.'
+  ] : []).concat([
     '',
     'Filas del mes: ' + fmtNumber_(ingresosResult.rows.length) +
       ' de Ingresos, ' + fmtNumber_(gmailResult.rows.length) + ' de Gmail, ' +

@@ -37,7 +37,7 @@ const api = new Function(
     summarizeMonth_, previousMonthPrefix_, mergeAvailableMonths_,
     buildHistoricoSeries_, readHistorico_, HISTORICO_HEADERS,
     readDisplayFallback_, makeMatchContext_, matchRow_,
-    providerSimilarity_, providerComparable_
+    providerSimilarity_, providerComparable_, readPlan_, readApuntes_
   };`
 )(...Object.values(stubs));
 
@@ -490,6 +490,106 @@ const transcurrido = Date.now() - inicio;
 ok('20.000 filas se cruzan en menos de 2 segundos',
    transcurrido < 2000, true);
 console.log(`      (${transcurrido} ms)`);
+
+/* ============ rango usado inflado ============ */
+console.log('\n--- rango usado inflado ---');
+
+// El rango usado de una hoja puede ser mucho más grande que sus datos: basta
+// con que alguien haya pintado o pegado algo mil filas más abajo. Pedir
+// getDisplayValues() de ahí formatea celda por celda, y era la primera
+// lectura de la carga —justo donde el tablero se quedaba girando.
+function hojaEspia(filas) {
+  const ancho = filas.reduce((m, r) => Math.max(m, r.length), 0);
+  const lleno = filas.map((r) => {
+    const copia = r.slice();
+    copia.length = ancho;
+    return Array.from(copia, (v) => (v === undefined ? '' : v));
+  });
+
+  const espia = { formateadas: 0, leidas: 0 };
+
+  const rango = (fila, col, nfilas, ncols) => ({
+    getValues: () => {
+      espia.leidas += nfilas * ncols;
+      return lleno.slice(fila - 1, fila - 1 + nfilas)
+        .map((r) => r.slice(col - 1, col - 1 + ncols));
+    },
+    getDisplayValues: () => {
+      espia.formateadas += nfilas * ncols;
+      return lleno.slice(fila - 1, fila - 1 + nfilas)
+        .map((r) => r.slice(col - 1, col - 1 + ncols).map((v) => String(v ?? '')));
+    }
+  });
+
+  espia.hoja = {
+    getLastRow: () => lleno.length,
+    getLastColumn: () => ancho,
+    getRange: rango,
+    getDataRange: () => rango(1, 1, lleno.length, ancho)
+  };
+
+  return espia;
+}
+
+function planCon(vacias) {
+  const filas = [
+    ['Proveedores', 'SEP-2026', 'OCT-2026'],
+    ['SAVI', 4000, 4200],
+    ['DIGUA', 3000, 3100]
+  ];
+
+  for (let i = 0; i < vacias; i++) { filas.push(['', '', '']); }
+
+  return hojaEspia(filas);
+}
+
+const mesSep = monthWindow('2026-09');
+
+const planChico = planCon(0);
+const planInflado = planCon(20000);
+
+const leerPlan = (espia) => api.readPlan_(
+  { getSheetByName: () => espia.hoja }, mesSep, {}
+);
+
+const chico = leerPlan(planChico);
+const inflado = leerPlan(planInflado);
+
+ok('lee el plan de los proveedores que hay', chico.rows.length, 2);
+ok('las filas vacías no inventan proveedores', inflado.rows.length, 2);
+ok('  y el plan sigue siendo el mismo',
+   inflado.rows.map((r) => r.plan).sort(), chico.rows.map((r) => r.plan).sort());
+
+// Lo que importa: formatear no puede crecer con el rango usado.
+ok('no formatea la hoja Plan entera',
+   planInflado.formateadas, planChico.formateadas);
+ok('  y lo que formatea es solo el encabezado',
+   planChico.formateadas <= 3 * planChico.hoja.getLastColumn(), true);
+console.log(
+  `      (${planChico.formateadas} celdas con 2 filas, ` +
+  `${planInflado.formateadas} con 20.000 vacías debajo)`
+);
+
+// Los apuntes sí necesitan formato, pero de sus columnas de fecha, no de los
+// textos largos del diagnóstico y del plan de acción.
+const apuntes = hojaEspia([
+  ['ID', 'Semana', 'Inicio', 'Fin', 'Ambito', 'Proveedor', 'Clasificacion',
+   'Plan semana', 'Recibido', 'Desvio', 'Cumplimiento', 'Diagnostico',
+   'Plan de accion', 'Responsable', 'Estado', 'Prioridad', 'Autor',
+   'Creado', 'Actualizado'],
+  ['a1', '2026-W39', '2026-09-21', '2026-09-25', 'PROVEEDOR', 'SAVI', 'Riesgo',
+   500, 420, -80, 0.84, 'texto largo '.repeat(40), 'otro texto largo '.repeat(40),
+   'ignacio', 'Abierto', 'Alta', 'comprador', '25/09/2026', '25/09/2026']
+]);
+
+const leidos = api.readApuntes_({ getSheetByName: () => apuntes.hoja });
+
+ok('lee el apunte', leidos.length, 1);
+ok('  con sus fechas', [leidos[0].start, leidos[0].end],
+   ['2026-09-21', '2026-09-25']);
+ok('  y sus cifras', [leidos[0].plan, leidos[0].received], [500, 420]);
+ok('no formatea las columnas de texto largo',
+   apuntes.formateadas < apuntes.hoja.getLastColumn() * 2, true);
 
 console.log(`\n${passed} pasan, ${failed} fallan`);
 process.exit(failed ? 1 : 0);
